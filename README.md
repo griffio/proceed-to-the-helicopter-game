@@ -72,6 +72,12 @@ WebGPU only runs in a secure context, meaning `localhost` or HTTPS. An iPad open
 
 There is no build step. The game is plain ES modules loaded straight from `src/`.
 
+### Deploy to GitHub Pages
+
+`.github/workflows/deploy-pages.yml` publishes the game on every push to `master` (or run it by hand from the Actions tab). GitHub Pages serves over HTTPS, so it works on iPad.
+
+One-time setup: in the repo, go to **Settings → Pages → Build and deployment** and set **Source** to **GitHub Actions**. The game is then served at `https://<user>.github.io/<repo>/`.
+
 ## Audio
 
 All sound effects and voice lines are pre-generated with ElevenLabs into `assets/audio/` and played with the Web Audio API, with a radio filter on the squad's voices. The API key is only used when generating, never shipped to the browser.
