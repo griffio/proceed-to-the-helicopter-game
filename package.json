@@ -1,0 +1,9 @@
+{
+  "name": "proceed-to-the-helicopter",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "audio": "node tools/generate-audio.mjs",
+    "serve": "npx --yes http-server -c-1 -p 8080 ."
+  }
+}
