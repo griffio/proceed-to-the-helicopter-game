@@ -596,24 +596,43 @@ export class Renderer {
   }
 }
 
-// Camera: looks down at target from the south at a fixed pitch.
+// Camera: orbits the target at a fixed pitch. yaw 0 looks north from the south;
+// increasing yaw turns the world clockwise on screen.
 export class Camera {
   constructor() {
     this.tx = 10; this.tz = 30; this.dist = 30; this.pitch = 1.02; this.fov = 0.78;
+    this.yaw = 0; this.yawGoal = null;
     this.goal = null; this.shake = 0; this.aspect = 1;
   }
-  eye() {
-    const sx = (Math.random() - 0.5) * this.shake, sz = (Math.random() - 0.5) * this.shake;
-    return [this.tx + sx, Math.sin(this.pitch) * this.dist, this.tz + Math.cos(this.pitch) * this.dist + sz];
+  // Ground-plane directions of screen-right and screen-up.
+  axes() {
+    const s = Math.sin(this.yaw), c = Math.cos(this.yaw);
+    return { right: [c, -s], fwd: [-s, -c] };
   }
+  // Move the target so the map follows a finger drag of (dx, dy) css pixels.
+  pan(dx, dy, worldPerPx) {
+    const { right, fwd } = this.axes();
+    const a = -dx * worldPerPx, b = (dy * worldPerPx) / Math.sin(this.pitch);
+    this.tx += right[0] * a + fwd[0] * b;
+    this.tz += right[1] * a + fwd[1] * b;
+    this.goal = null;
+  }
+  // Turn by a quarter step, snapping to the nearest compass direction.
+  turn(dir) {
+    const q = Math.PI / 2;
+    this.yawGoal = Math.round((this.yawGoal ?? this.yaw) / q) * q + dir * q;
+  }
+  faceNorth() { this.yawGoal = Math.round(this.yaw / (Math.PI * 2)) * Math.PI * 2; }
   matrices(w, h) {
     this.aspect = w / h;
-    const eye = this.eye();
+    const sx = (Math.random() - 0.5) * this.shake, sz = (Math.random() - 0.5) * this.shake;
+    const c = Math.cos(this.pitch) * this.dist;
+    const eye = [this.tx + sx + Math.sin(this.yaw) * c, Math.sin(this.pitch) * this.dist, this.tz + sz + Math.cos(this.yaw) * c];
     this._eye = eye;
-    const view = mat4.lookAt(eye, [this.tx + (eye[0] - this.tx), 0, this.tz + (eye[2] - this.tz - Math.cos(this.pitch) * this.dist)], [0, 1, 0]);
+    const view = mat4.lookAt(eye, [this.tx + sx, 0, this.tz + sz], [0, 1, 0]);
     const proj = mat4.perspective(this.fov, this.aspect, 1, 400);
     this.vp = mat4.mul(proj, view);
-    const f = norm([this.tx - eye[0], -eye[1], this.tz - eye[2]]);
+    const f = norm([this.tx + sx - eye[0], -eye[1], this.tz + sz - eye[2]]);
     const r = norm(cross(f, [0, 1, 0]));
     const u = cross(r, f);
     this.basis = { f, r, u };

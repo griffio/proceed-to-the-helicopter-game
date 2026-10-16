@@ -105,7 +105,9 @@ export class Game {
   focus(x, z, force = false) {
     const c = this.camera;
     const halfW = Math.tan(c.fov / 2) * c.dist * c.aspect * 0.55, halfH = Math.tan(c.fov / 2) * c.dist * 0.5;
-    if (force || Math.abs(x - c.tx) > halfW || Math.abs(z - c.tz) > halfH) c.goal = [x, z];
+    const { right, fwd } = c.axes();
+    const dx = x - c.tx, dz = z - c.tz;
+    if (force || Math.abs(dx * right[0] + dz * right[1]) > halfW || Math.abs(dx * fwd[0] + dz * fwd[1]) > halfH) c.goal = [x, z];
   }
 
   update(dt) {
@@ -123,7 +125,11 @@ export class Game {
       c.tx += (c.goal[0] - c.tx) * k; c.tz += (c.goal[1] - c.tz) * k;
       if (Math.abs(c.goal[0] - c.tx) < 0.05 && Math.abs(c.goal[1] - c.tz) < 0.05) c.goal = null;
     }
-    c.tx = clamp(c.tx, 6, MW - 6); c.tz = clamp(c.tz, 4, MH - 2);
+    if (c.yawGoal !== null) {
+      c.yaw += (c.yawGoal - c.yaw) * (1 - Math.exp(-dt * 9));
+      if (Math.abs(c.yawGoal - c.yaw) < 0.002) { c.yaw = c.yawGoal; c.yawGoal = null; }
+    }
+    c.tx = clamp(c.tx, 4, MW - 4); c.tz = clamp(c.tz, 3, MH - 3);
     c.shake = this.fx.shake * 0.6;
     for (const u of this.units) {
       const d = angleDiff(u.facing, u.rfacing);
@@ -1277,14 +1283,17 @@ export class Game {
   viewRect(w, h) {
     const cam = this.camera;
     let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
-    for (const [px, py] of [[0, 0], [w, 0], [0, h], [w, h]]) {
+    const ground = [];
+    for (const [px, py] of [[0, 0], [w, 0], [w, h], [0, h]]) {
       const { o, d } = cam.ray(px, py, w, h);
       for (const planeY of [0, 18]) {
         const t = d[1] < -0.02 ? (planeY - o[1]) / d[1] : 200;
         const x = o[0] + d[0] * Math.max(0, t), z = o[2] + d[2] * Math.max(0, t);
         x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z);
+        if (planeY === 0) ground.push([x, z]);
       }
     }
+    this.footprint = ground; // on-screen ground quad, for the minimap
     const m = 3;
     return [x0 - m, z0 - m, x1 + m, z1 + m];
   }

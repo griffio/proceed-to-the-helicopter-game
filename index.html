@@ -69,6 +69,12 @@ button { font-family: var(--head); color: var(--txt); cursor: pointer; touch-act
 #minimapWrap { padding: 4px; display: flex; gap: 6px; align-items: flex-start; }
 #minimap { width: 200px; height: 120px; image-rendering: pixelated; border-radius: 3px; display: block; touch-action: none; }
 .side-btns { display: flex; flex-direction: column; gap: 6px; }
+.mapcol { display: flex; flex-direction: column; gap: 6px; }
+#rotbar { display: flex; justify-content: space-between; gap: 6px; }
+#rotbar .icon-btn { flex: 1; width: auto; font-size: 24px; }
+#needle { display: flex; flex-direction: column; align-items: center; line-height: 1; will-change: transform; }
+#needle b { font-size: 11px; color: var(--bad); font-weight: 700; }
+#needle i { width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-bottom: 14px solid var(--bad); margin-top: 1px; }
 .icon-btn { width: 44px; height: 44px; border-radius: 6px; background: var(--bg2); border: 1px solid var(--line); font-size: 20px; display: grid; place-items: center; }
 
 #squad { position: absolute; left: calc(10px + var(--sa-l)); top: calc(78px + var(--sa-t)); display: flex; flex-direction: column; gap: 8px; width: 168px; }
@@ -216,7 +222,14 @@ button { font-family: var(--head); color: var(--txt); cursor: pointer; touch-act
     <div id="turnbox" class="panel"><div id="turn">TURN 1</div><div id="status" class="stealth">UNDETECTED</div></div>
     <div id="objective"></div>
     <div id="minimapWrap" class="panel">
-      <canvas id="minimap" width="300" height="180"></canvas>
+      <div class="mapcol">
+        <canvas id="minimap" width="300" height="180"></canvas>
+        <div id="rotbar">
+          <button id="rotl" class="icon-btn" aria-label="Rotate view left">↺</button>
+          <button id="compass" class="icon-btn" aria-label="Face north"><span id="needle"><b>N</b><i></i></span></button>
+          <button id="rotr" class="icon-btn" aria-label="Rotate view right">↻</button>
+        </div>
+      </div>
       <div class="side-btns"><button id="mute" class="icon-btn" aria-label="Mute">🔊</button><button id="help" class="icon-btn" aria-label="How to play">?</button></div>
     </div>
   </div>
@@ -244,7 +257,7 @@ button { font-family: var(--head); color: var(--txt); cursor: pointer; touch-act
     <div id="roster"></div>
     <div id="diff"></div>
     <button id="deploy" class="big">DEPLOY</button>
-    <div class="tips">Tap a tile to preview · tap again to move · tap an enemy to aim · drag to pan · pinch to zoom</div>
+    <div class="tips">Tap a tile to preview · tap again to move · tap an enemy to aim · drag to pan · pinch to zoom · twist to rotate</div>
   </div>
 </div>
 
@@ -261,6 +274,7 @@ button { font-family: var(--head); color: var(--txt); cursor: pointer; touch-act
       <li><b>Accuracy:</b> cover, smoke, darkness, height and field of view all matter. Hitting enemies outside their view (or unaware) is much easier.</li>
       <li><b>Snipers</b> paint a target with a red laser and fire next turn. Break line of sight or drop smoke.</li>
       <li><b>Destruction:</b> rockets and grenades flatten walls and cover. Cars explode when shot enough — and set off alarms that lure guards.</li>
+      <li><b>Camera:</b> drag to pan, pinch to zoom, twist two fingers to rotate (or use ↺ ↻). Tap the compass to face north again.</li>
       <li><b>Extract:</b> step an agent into the green landing zone and press EXTRACT.</li>
     </ul>
     <p style="color:var(--dim)">Tap anywhere to close.</p>

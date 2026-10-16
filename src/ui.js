@@ -39,6 +39,10 @@ export class UI {
       else if (u) this.game.focus(u.rx, u.rz, true);
     });
     $('#endturn').addEventListener('click', () => this.game?.endTurn());
+    $('#rotl').addEventListener('click', () => this.game?.camera.turn(-1));
+    $('#rotr').addEventListener('click', () => this.game?.camera.turn(1));
+    $('#compass').addEventListener('click', () => this.game?.camera.faceNorth());
+    this.needle = $('#needle');
     $('#fire').addEventListener('click', () => this.game?.confirm());
     $('#cancel').addEventListener('click', () => this.game?.cancelAction());
     $('#chips').addEventListener('click', (e) => {
@@ -222,6 +226,8 @@ export class UI {
       if (f.t > 2.2) { f.el.remove(); this.floats.splice(k, 1); }
     }
 
+    // compass needle points to map north on screen
+    this.needle.style.transform = `rotate(${cam.yaw}rad)`;
     this.miniT -= dt;
     if (this.miniT <= 0) { this.miniT = 0.25; this.drawMini(); }
   }
@@ -254,11 +260,16 @@ export class UI {
     const sx = cw / MW, sy = ch / MH;
     for (const e of g.enemies) if (!e.dead && e.seen) { c.fillStyle = e.state === 'alerted' ? '#ff3b30' : '#ffb020'; c.fillRect(e.x * sx - 1.5, e.y * sy - 1.5, 4, 4); }
     for (const a of g.agents) if (g.alive(a)) { c.fillStyle = a.color; c.beginPath(); c.arc((a.x + 0.5) * sx, (a.y + 0.5) * sy, 3.2, 0, 7); c.fill(); }
-    // camera footprint
-    const cam = g.camera;
-    const hw = Math.tan(cam.fov / 2) * cam.dist * cam.aspect, hh = Math.tan(cam.fov / 2) * cam.dist * 0.8;
-    c.strokeStyle = 'rgba(255,255,255,0.5)'; c.lineWidth = 1;
-    c.strokeRect((cam.tx - hw) * sx, (cam.tz - hh) * sy, hw * 2 * sx, hh * 2 * sy);
+    // what the camera currently sees (rotates with the view); the brighter edge is the top of the screen
+    const fp = g.footprint;
+    if (fp) {
+      c.strokeStyle = 'rgba(255,255,255,0.45)'; c.lineWidth = 1;
+      c.beginPath();
+      fp.forEach(([x, z], k) => (k ? c.lineTo(x * sx, z * sy) : c.moveTo(x * sx, z * sy)));
+      c.closePath(); c.stroke();
+      c.strokeStyle = 'rgba(79,216,255,0.9)'; c.lineWidth = 2;
+      c.beginPath(); c.moveTo(fp[0][0] * sx, fp[0][1] * sy); c.lineTo(fp[1][0] * sx, fp[1][1] * sy); c.stroke();
+    }
   }
 
   showStart(onStart) {

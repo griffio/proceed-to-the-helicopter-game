@@ -1,5 +1,5 @@
 import { MW, MH, O } from './defs.js';
-import { clamp } from './util.js';
+import { clamp, angleDiff } from './util.js';
 
 // Touch-first camera + tap handling (pointer events cover iPad touch, Pencil and mouse).
 export class Input {
@@ -31,7 +31,8 @@ export class Input {
     if (this.ptrs.size === 2) {
       const [a, b] = [...this.ptrs.values()];
       const g = this.getGame();
-      this.pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), dist: g?.camera.dist ?? 30, cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 };
+      this.pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), dist: g?.camera.dist ?? 30, cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2,
+        ang: Math.atan2(b.y - a.y, b.x - a.x), twist: 0, rotating: false };
       this.drag = true;
     } else if (this.ptrs.size === 1) this.drag = false;
   }
@@ -56,19 +57,21 @@ export class Input {
       const d = Math.hypot(a.x - b.x, a.y - b.y);
       cam.dist = clamp(this.pinch.dist * (this.pinch.d / Math.max(20, d)), 10, 70);
       const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
-      const k = this.worldPerPx();
-      cam.tx -= (cx - this.pinch.cx) * k; cam.tz -= ((cy - this.pinch.cy) * k) / Math.sin(cam.pitch);
+      cam.pan(cx - this.pinch.cx, cy - this.pinch.cy, this.worldPerPx());
       this.pinch.cx = cx; this.pinch.cy = cy;
-      cam.goal = null;
+      // two-finger twist rotates the view (after a small dead zone so pinches don't wobble it)
+      const ang = Math.atan2(b.y - a.y, b.x - a.x);
+      const da = angleDiff(ang, this.pinch.ang);
+      this.pinch.ang = ang;
+      this.pinch.twist += da;
+      if (this.pinch.rotating || Math.abs(this.pinch.twist) > 0.15) {
+        this.pinch.rotating = true;
+        cam.yaw += da; cam.yawGoal = null;
+      }
       return;
     }
     if (!this.drag && Math.hypot(e.clientX - p.sx, e.clientY - p.sy) > 12) this.drag = true;
-    if (this.drag) {
-      const k = this.worldPerPx();
-      cam.tx = clamp(cam.tx - dx * k, 0, MW);
-      cam.tz = clamp(cam.tz - (dy * k) / Math.sin(cam.pitch), 0, MH);
-      cam.goal = null;
-    }
+    if (this.drag) cam.pan(dx, dy, this.worldPerPx());
   }
 
   up(e) {
@@ -138,10 +141,12 @@ export class Input {
         if (list.length && g.phase === 'player' && !g.busy) g.select(list[(i + 1) % list.length]);
         break;
       }
-      case 'ArrowLeft': case 'a': cam.tx -= 3; cam.goal = null; break;
-      case 'ArrowRight': case 'd': cam.tx += 3; cam.goal = null; break;
-      case 'ArrowUp': case 'w': cam.tz -= 3; cam.goal = null; break;
-      case 'ArrowDown': case 's': cam.tz += 3; cam.goal = null; break;
+      case 'ArrowLeft': case 'a': cam.pan(80, 0, this.worldPerPx()); break;
+      case 'ArrowRight': case 'd': cam.pan(-80, 0, this.worldPerPx()); break;
+      case 'ArrowUp': case 'w': cam.pan(0, 80, this.worldPerPx()); break;
+      case 'ArrowDown': case 's': cam.pan(0, -80, this.worldPerPx()); break;
+      case 'q': cam.turn(-1); break;
+      case 'e': cam.turn(1); break;
     }
   }
 }
