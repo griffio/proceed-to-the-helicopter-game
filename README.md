@@ -134,5 +134,6 @@ Rendering notes:
 - Surfaces get normal maps derived from their textures when the game loads, so joints, cracks and bricks catch the light, and rain lingers in the grooves.
 - Contact shadows darken the ground where it meets walls, cars and props. They come from a per-tile map stored alongside the fog of war.
 - Bloom makes fire, neon, lamps and muzzle flashes glow. It runs at half resolution and below.
+- Agents and enemies are posed procedurally every frame from a simple jointed rig. They walk in step with their speed, crouch behind low cover, hunker down, raise their weapons to aim, recoil, flinch when hit, and fall when they go down.
 - Fire particles are pooled and budgeted, so a street of burning cars costs about the same as a few.
 - The game lowers its render resolution if it can't hold about 40 fps.

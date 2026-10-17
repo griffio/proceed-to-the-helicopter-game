@@ -364,7 +364,7 @@ export class Game {
 
   muzzlePos(u) {
     const h = this.map.standH(this.idx(u.x, u.y));
-    return [u.rx + Math.cos(u.rfacing) * 0.45, h + 0.72, u.rz + Math.sin(u.rfacing) * 0.45];
+    return [u.rx + Math.cos(u.rfacing) * 0.45, h + 0.72 - 0.2 * (u.anim?.crouch || 0), u.rz + Math.sin(u.rfacing) * 0.45];
   }
   bodyPos(t) {
     if (t.side) return [t.rx, this.map.standH(this.idx(t.x, t.y)) + 0.85, t.rz];
@@ -397,12 +397,12 @@ export class Game {
     if (W.kind === 'laser') {
       this.audio.play('laser_charge', { pos: [u.x, u.y], vol: 0.6 });
       await this.sleep(120);
-      this.fx.laser(from, end);
+      u.fireT = this.time; this.fx.laser(from, end);
     } else {
       const n = W.burst || 1;
       for (let k = 0; k < n; k++) {
         const jitter = k === n - 1 ? end : [end[0] + (Math.random() - 0.5) * 0.7, end[1] + (Math.random() - 0.5) * 0.4, end[2] + (Math.random() - 0.5) * 0.7];
-        this.fx.muzzle(from[0], from[1], from[2], Math.cos(u.facing), Math.sin(u.facing), u.side === 'enemy' ? [1, 0.5, 0.3] : [1, 0.85, 0.5]);
+        u.fireT = this.time; this.fx.muzzle(from[0], from[1], from[2], Math.cos(u.facing), Math.sin(u.facing), u.side === 'enemy' ? [1, 0.5, 0.3] : [1, 0.85, 0.5]);
         this.fx.tracer(from, jitter, W.tracer, wk === 'sniper' || wk === 'esniper' ? 0.07 : 0.045, wk === 'sniper' ? 0.25 : 0.1);
         if (k < n - 1) await this.sleep(55);
       }
@@ -471,6 +471,7 @@ export class Game {
 
   async damageUnit(u, dmg, { crit = false, source = null, explosive = false, fall = false, burn = false } = {}) {
     if (!this.alive(u)) return;
+    u.hitT = this.time;
     if (u.side === 'agent' && u.downed) {
       if (explosive || burn) { await this.killAgent(u); }
       return;
@@ -639,7 +640,7 @@ export class Game {
       const imp = this.rocketImpact(u, tx, ty);
       this.audio.voice(u.key, 'ability', { priority: true });
       this.audio.play('rocket_launch', { pos: [u.x, u.y] });
-      this.fx.muzzle(from[0], from[1], from[2], Math.cos(u.facing), Math.sin(u.facing), [1, 0.6, 0.3]);
+      u.fireT = this.time; this.fx.muzzle(from[0], from[1], from[2], Math.cos(u.facing), Math.sin(u.facing), [1, 0.6, 0.3]);
       for (let k = 0; k < 8; k++) this.fx.spawn({ x: u.rx - Math.cos(u.facing) * 0.6, y: from[1], z: u.rz - Math.sin(u.facing) * 0.6, vx: -Math.cos(u.facing) * 3 + (Math.random() - 0.5), vy: Math.random(), vz: -Math.sin(u.facing) * 3 + (Math.random() - 0.5), drag: 2, size: 0.3, size1: 1.0, col: [0.6, 0.6, 0.6, 0.5], max: 1.5, shape: 2 });
       const to = [imp.x + 0.5, Math.max(0.5, m.standH(this.idx(imp.x, imp.y)) + 0.8), imp.y + 0.5];
       if (imp.blocked) { const [px, py] = imp.prev; to[0] = (px + imp.x) / 2 + 0.5; to[2] = (py + imp.y) / 2 + 0.5; }
@@ -968,7 +969,7 @@ export class Game {
     const from = this.muzzlePos(u), b = this.bodyPos(t);
     for (let k = 0; k < 10; k++) {
       const end = [b[0] + (Math.random() - 0.5) * 2.2, 0.2 + Math.random() * 1.3, b[2] + (Math.random() - 0.5) * 2.2];
-      this.fx.muzzle(from[0], from[1], from[2], Math.cos(u.facing), Math.sin(u.facing));
+      u.fireT = this.time; this.fx.muzzle(from[0], from[1], from[2], Math.cos(u.facing), Math.sin(u.facing));
       this.fx.tracer(from, end, W.tracer);
       this.fx.impact(end[0], end[1], end[2]);
       await this.sleep(50);
@@ -1342,6 +1343,150 @@ export class Game {
     decals.push((lz.x0 + lz.x1 + 1) / 2, 0.12, (lz.y0 + lz.y1 + 1) / 2, 0, lz.x1 - lz.x0 + 1, lz.y1 - lz.y0 + 1, 0, 0, 0.2, 1, 0.4, 0.08, 0.2, 0, 1, 0);
   }
 
+  // ---------- procedural unit rig ----------
+  // Each frame a unit is posed from a few joints: two-bone legs and arms, a leaning torso, a head
+  // and a held weapon. Joints are points in unit space [forward, up, right]; every limb is a box
+  // stretched between two of them, so a fall is one rotation applied to all the points.
+  // Returns how far the body bobs, for the ground markers.
+  drawRig(u, dyn, isAgent, col, acc, at, f) {
+    const t = this.time, dt = Math.min(0.1, Math.max(0, t - (u._at ?? t)));
+    u._at = t;
+    const A = u.anim || (u.anim = { crouch: 0, aim: 0, fall: 0, stride: 0, px: u.rx, pz: u.rz, dir: u.id % 3 === 0 ? -1 : 1, pts: {} });
+    const ease = (cur, target, rate) => cur + (target - cur) * Math.min(1, dt * rate);
+    // the walk cycle follows distance travelled, so feet don't skate at any speed
+    A.stride += Math.hypot(u.rx - A.px, u.rz - A.pz); A.px = u.rx; A.pz = u.rz;
+    const lying = u.dead || u.downed;
+    const recent = (k) => k != null && t - k < 1.2;
+    const ready = recent(u.fireT) || u.overwatch || (isAgent ? this.selected === u && this.mode === 'target' : u.state === 'alerted');
+    A.aim = ease(A.aim, lying ? 0 : ready ? 1 : 0, 6);
+    A.crouch = ease(A.crouch, lying || u.moving ? 0 : u.hunker ? 1 : this.lowCoverNear(u) ? 0.6 : 0, 7);
+    A.fall = lying ? Math.min(1, A.fall + dt * 2.4) : Math.max(0, A.fall - dt * 3);
+    const c = A.crouch, aim = A.aim, walking = u.moving && !lying;
+    const kickT = u.fireT == null ? 9 : t - u.fireT, kick = kickT < 0.4 ? Math.exp(-kickT * 16) : 0;
+    const hitT = u.hitT == null ? 9 : t - u.hitT, flinch = hitT < 0.5 ? Math.sin(hitT / 0.5 * Math.PI) : 0;
+    const bulky = u.def?.bulky ? 1.18 : 1;
+    const LT = 0.21, LS = 0.21, UA = 0.15, FA = 0.15, TORSO = 0.3;
+
+    // legs: thigh and shin angles from vertical, forward positive
+    const ph = A.stride * (2 * Math.PI / 1.0);
+    const legAngles = (side) => {
+      if (walking) {
+        const p = ph + (side > 0 ? Math.PI : 0), th = 0.6 * Math.sin(p);
+        return [th, th - (0.15 + 0.85 * Math.max(0, Math.cos(p)))];
+      }
+      const th = 1.2 * c + side * 0.04 * (1 - c);
+      return [th, th - 2.3 * c];
+    };
+    const [lt, ls] = legAngles(-1), [rt, rs] = legAngles(1);
+    const legH = (th, sh) => LT * Math.cos(th) + LS * Math.cos(sh);
+    const hipY = Math.max(legH(lt, ls), legH(rt, rs)) + (walking ? 0 : 0.005 * Math.sin(t * 2 + u.id));
+    const lean = (walking ? 0.12 : 0) + 0.35 * c + 0.1 * aim - 0.3 * flinch - 0.1 * kick;
+    const sl = Math.sin(lean), cl = Math.cos(lean);
+    const P = A.pts, pt = (k, fw, up, rt) => { const q = P[k] || (P[k] = [0, 0, 0]); q[0] = fw; q[1] = up; q[2] = rt; return q; };
+    const hipF = -0.04 * c;
+    pt('hip', hipF, hipY, 0);
+    const hw = 0.08 * bulky;
+    for (const [side, th, sh] of [[-1, lt, ls], [1, rt, rs]]) {
+      const kx = hipF + LT * Math.sin(th), ky = hipY - LT * Math.cos(th);
+      pt('h' + side, hipF, hipY, side * hw);
+      pt('k' + side, kx, ky, side * hw);
+      pt('f' + side, kx + LS * Math.sin(sh), ky - LS * Math.cos(sh), side * hw);
+    }
+    pt('neck', hipF + sl * TORSO, hipY + cl * TORSO, 0);
+    const shF = hipF + sl * TORSO * 0.88, shY = hipY + cl * TORSO * 0.88;
+    pt('s-1', shF, shY, -0.15 * bulky); pt('s1', shF, shY, 0.15 * bulky);
+    // weapon: low ready, raised to the shoulder when aiming, kicked back by recoil
+    const wk = this.weaponOf(u);
+    const glen = wk === 'sniper' || wk === 'esniper' ? 0.8 : wk === 'mg' || wk === 'emg' ? 0.65 : wk === 'laser' || wk === 'pistol' ? 0.28 : 0.52;
+    const wp = -0.42 * (1 - aim) + 0.25 * kick, wc = Math.cos(wp), ws = Math.sin(wp);
+    const gF = shF + 0.1 + 0.08 * aim - 0.07 * kick, gY = shY - 0.1 + 0.05 * aim;
+    pt('grip', gF, gY, 0.07);
+    pt('stock', gF - wc * 0.1, gY - ws * 0.1, 0.07);
+    pt('muzzle', gF + wc * (glen - 0.1), gY + ws * (glen - 0.1), 0.07);
+    const fore = Math.min(0.24, glen * 0.5);
+    pt('fore', gF + wc * fore, gY + ws * fore, 0.07);
+    // arms reach the grip and the foregrip, elbows pointing down and out
+    for (const [side, hand] of [[1, 'grip'], [-1, 'fore']]) {
+      const S = P['s' + side], H = P[hand];
+      const dx = H[0] - S[0], dy = H[1] - S[1], dz = H[2] - S[2];
+      const len = Math.min(Math.hypot(dx, dy, dz), UA + FA - 1e-3), n = 1 / Math.max(1e-4, Math.hypot(dx, dy, dz));
+      const nx = dx * n, ny = dy * n, nz = dz * n;
+      const a = (UA * UA - FA * FA + len * len) / (2 * len), h = Math.sqrt(Math.max(0, UA * UA - a * a));
+      let px = -0.2, py = -1, pz = side * 0.6;  // pole
+      const pd = px * nx + py * ny + pz * nz; px -= nx * pd; py -= ny * pd; pz -= nz * pd;
+      const pl = 1 / Math.max(1e-4, Math.hypot(px, py, pz));
+      pt('e' + side, S[0] + nx * a + px * pl * h, S[1] + ny * a + py * pl * h, S[2] + nz * a + pz * pl * h);
+    }
+
+    // fall: rotate every joint about the feet, backward (or forward for some), onto the ground
+    const fk = A.fall * A.fall, phi = fk * (Math.PI / 2 - 0.08) * A.dir;
+    const cp = Math.cos(phi), sp = Math.sin(phi), lift = 0.07 * fk;
+    const cf = Math.cos(f), sf = Math.sin(f);
+    const W = (q) => {  // unit space -> world
+      const fw = q[0] * cp - q[1] * sp, up = q[0] * sp + q[1] * cp + lift;
+      return [u.rx + cf * fw - sf * q[2], u.ry + up, u.rz + sf * fw + cf * q[2]];
+    };
+    // a box between two joints: base at a, extending along the bone (pitch/roll solve the direction)
+    const bone = (ka, kb, tf, tr, colr, mat = 0, emis = 0, set = dyn.box) => {
+      const a = P[ka], b = P[kb];
+      let df = b[0] - a[0], du = b[1] - a[1], dr = b[2] - a[2];
+      const fw = df * cp - du * sp; du = df * sp + du * cp; df = fw;
+      const L = Math.hypot(df, du, dr);
+      if (L < 1e-4) return;
+      const roll = Math.asin(Math.max(-1, Math.min(1, -dr / L))), pitch = Math.atan2(df, -du);
+      const w = W(a);
+      set.add(w[0], w[1], w[2], tf, -L, tr, f, colr, mat, emis, pitch, roll);
+    };
+    const dark = scale3(col, 0.55), mid = scale3(col, 0.8);
+    const deadTint = u.dead && !isAgent ? 0.6 : 1;
+    const C = (c3) => (deadTint === 1 ? c3 : scale3(c3, deadTint));
+    bone('k-1', 'f-1', 0.09, 0.09, C(dark)); bone('k1', 'f1', 0.09, 0.09, C(dark));
+    bone('h-1', 'k-1', 0.1, 0.1, C(mid)); bone('h1', 'k1', 0.1, 0.1, C(mid));
+    bone('hip', 'neck', 0.2 * bulky, 0.3 * bulky, C(col));
+    // chest band in the unit's colour (lit for agents), backpack, arms, head
+    pt('b0', hipF + sl * TORSO * 0.62, hipY + cl * TORSO * 0.62, 0); pt('b1', hipF + sl * TORSO * 0.74, hipY + cl * TORSO * 0.74, 0);
+    bone('b0', 'b1', 0.22 * bulky, 0.32 * bulky, acc, isAgent ? 4 : 0, isAgent ? (u.downed ? 1.5 + Math.sin(t * 6) : 1.6) : 0.3);
+    pt('p0', hipF + sl * 0.08 - cl * 0.13, hipY + cl * 0.08 + sl * 0.13, 0); pt('p1', hipF + sl * 0.27 - cl * 0.13, hipY + cl * 0.27 + sl * 0.13, 0);
+    bone('p0', 'p1', 0.1, 0.24, u.type === 'grenadier' ? lin('#3a4a22') : C(scale3(col, 0.75)));
+    if (wk === 'mg' && u.items?.rocket > 0) {
+      pt('r0', hipF + sl * 0.05 - cl * 0.2, hipY + cl * 0.05 + sl * 0.2, -0.1); pt('r1', hipF + sl * 0.45 - cl * 0.2, hipY + cl * 0.45 + sl * 0.2, -0.1);
+      bone('r0', 'r1', 0.13, 0.13, lin('#3b4a33'), 0, 0, dyn.cyl);
+    }
+    bone('s1', 'e1', 0.08, 0.08, C(mid)); bone('e1', 'grip', 0.07, 0.07, C(dark));
+    bone('s-1', 'e-1', 0.08, 0.08, C(mid)); bone('e-1', 'fore', 0.07, 0.07, C(dark));
+    const lasery = wk === 'laser';
+    bone('stock', 'muzzle', 0.07, 0.07, lasery ? [0.6, 0.6, 0.7] : [0.05, 0.05, 0.06], lasery ? 3 : 0);
+    // head rides the neck, tilted with the torso
+    const hp = phi - lean, hn = W(P.neck);
+    const tilt = (k) => [hn[0] + cf * Math.sin(-hp) * k, hn[1] + Math.cos(hp) * k, hn[2] + sf * Math.sin(-hp) * k];
+    dyn.sph.add(hn[0], hn[1] - 0.02, hn[2], 0.23, 0.23, 0.23, f, isAgent ? lin('#c79a76') : C(lin('#1d1d22')), 0, 0, hp);
+    if (!isAgent) {
+      const hh = tilt(0.1);
+      dyn.sph.add(hh[0], hh[1], hh[2], 0.26, 0.14, 0.26, f, C(lin(u.officer ? '#1a1a26' : '#2a2c30')), 0, 0, hp);
+      const v = tilt(0.08);
+      if (!u.dead) dyn.box.add(v[0] + cf * 0.09, v[1], v[2] + sf * 0.09, 0.06, 0.05, 0.17, f, [1, 0.05, 0.03], 4, 3.5, hp);
+      if (u.officer) dyn.cyl.add(hh[0], hh[1] + 0.1, hh[2], 0.3, 0.035, 0.3, f, [1, 0.75, 0.2], 4, u.dead ? 0 : 1.5, hp);
+    } else {
+      const hh = tilt(0.06);
+      dyn.sph.add(hh[0], hh[1], hh[2], 0.25, 0.16, 0.25, f, lin('#22262c'), 0, 0, hp);
+      const v = tilt(0.1);
+      dyn.box.add(v[0] + cf * 0.1, v[1], v[2] + sf * 0.1, 0.05, 0.06, 0.19, f, acc, 4, 2.5, hp);
+    }
+    return walking ? hipY - (LT + LS) * Math.cos(0.5) : 0;
+  }
+
+  // Low cover on any side: a reason to crouch.
+  lowCoverNear(u) {
+    const m = this.map;
+    for (const [dx, dy] of DIR4) {
+      const x = u.x + dx, y = u.y + dy;
+      if (!m.inb(x, y)) continue;
+      const o = OBJ[m.obj[m.idx(x, y)]];
+      if (o.cover === 1 && !o.walk && !o.foliage) return true;
+    }
+    return false;
+  }
+
   drawUnits(dyn, decals, lights) {
     const m = this.map;
     for (const u of this.units) {
@@ -1355,43 +1500,10 @@ export class Game {
       const lying = u.dead || u.downed;
       const f = u.rfacing, cf = Math.cos(f), sf = Math.sin(f);
       const at = (fw, rt) => [u.rx + cf * fw - sf * rt, u.rz + sf * fw + cf * rt];
+      const yy = y + this.drawRig(u, dyn, isAgent, col, acc, at, f);
       if (lying) {
-        const [bx, bz] = at(-0.3, 0);
-        dyn.box.add(bx, y + 0.05, bz, 0.75, 0.22, 0.4, f, scale3(col, u.dead && !isAgent ? 0.6 : 1));
-        const [hx, hz] = at(0.2, 0);
-        dyn.sph.add(hx, y + 0.02, hz, 0.25, 0.25, 0.25, 0, isAgent ? lin('#c79a76') : lin('#2a2a2a'));
-        if (isAgent && u.downed) {
-          dyn.box.add(bx, y + 0.27, bz, 0.5, 0.06, 0.42, f, acc, 4, 1.5 + Math.sin(this.time * 6));
-          decals.push(u.rx, y + 0.1, u.rz, 0, 1.3, 1.3, 1, 0, 1, 0.15, 0.1, 0.5 + 0.4 * Math.sin(this.time * 6), 0.12, 0, 1, 0);
-        }
+        if (isAgent && u.downed) decals.push(u.rx, y + 0.1, u.rz, 0, 1.3, 1.3, 1, 0, 1, 0.15, 0.1, 0.5 + 0.4 * Math.sin(this.time * 6), 0.12, 0, 1, 0);
         continue;
-      }
-      const bob = u.moving ? Math.abs(Math.sin(u.walk * 3)) * 0.05 : 0;
-      const yy = y + bob;
-      const bulky = u.def?.bulky ? 1.18 : 1;
-      dyn.box.add(u.rx, yy, u.rz, 0.24, 0.42, 0.34 * bulky, f, scale3(col, 0.7));
-      dyn.box.add(u.rx, yy + 0.4, u.rz, 0.3 * bulky, 0.42, 0.46 * bulky, f, col);
-      dyn.box.add(u.rx, yy + 0.66, u.rz, 0.32 * bulky, 0.1, 0.48 * bulky, f, acc, isAgent ? 4 : 0, isAgent ? 1.6 : 0.3);
-      const [px, pz] = at(-0.2, 0);
-      dyn.box.add(px, yy + 0.42, pz, 0.14, 0.34, 0.34, f, u.type === 'grenadier' ? lin('#3a4a22') : scale3(col, 0.8));
-      dyn.sph.add(u.rx, yy + 0.8, u.rz, 0.27, 0.27, 0.27, 0, isAgent ? lin('#c79a76') : lin('#1d1d22'));
-      if (!isAgent) {
-        dyn.sph.add(u.rx, yy + 0.92, u.rz, 0.3, 0.16, 0.3, 0, lin(u.officer ? '#1a1a26' : '#2a2c30'));
-        const [vx, vz] = at(0.11, 0);
-        dyn.box.add(vx, yy + 0.9, vz, 0.07, 0.06, 0.2, f, [1, 0.05, 0.03], 4, 3.5);
-        if (u.officer) dyn.cyl.add(u.rx, yy + 1.02, u.rz, 0.34, 0.04, 0.34, 0, [1, 0.75, 0.2], 4, 1.5);
-      } else {
-        dyn.sph.add(u.rx, yy + 0.86, u.rz, 0.29, 0.18, 0.29, 0, lin('#22262c'));
-        const [gx, gz] = at(0.12, 0);
-        dyn.box.add(gx, yy + 0.9, gz, 0.06, 0.07, 0.22, f, acc, 4, 2.5);
-      }
-      const wk = this.weaponOf(u);
-      const glen = wk === 'sniper' || wk === 'esniper' ? 0.95 : wk === 'mg' || wk === 'emg' ? 0.75 : wk === 'laser' || wk === 'pistol' ? 0.35 : 0.6;
-      const [wx, wz] = at(glen / 2 - 0.02, 0.17);
-      dyn.box.add(wx, yy + 0.6, wz, glen, 0.08, 0.08, f, wk === 'laser' ? [0.6, 0.6, 0.7] : [0.05, 0.05, 0.06], wk === 'laser' ? 3 : 0);
-      if (wk === 'mg' && u.items?.rocket > 0) {
-        const [rx, rz] = at(-0.12, -0.12);
-        dyn.cyl.add(rx, yy + 0.55, rz, 0.16, 0.9, 0.16, f, lin('#3b4a33'), 0, 0, -1.2);
       }
       if (isAgent) {
         // tactical light so agents read in the dark
