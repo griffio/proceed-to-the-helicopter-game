@@ -32,6 +32,7 @@ jobs:
           mkdir -p _site/assets
           cp -r assets/audio _site/assets/audio
           cp -r assets/textures _site/assets/textures
+          cp -r assets/vehicles _site/assets/vehicles
 
       - uses: actions/configure-pages@v5
 

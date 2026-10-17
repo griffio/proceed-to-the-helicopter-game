@@ -101,6 +101,15 @@ python3 tools/generate-textures.py --process       # re-run the tiling step on c
 
 Prompts are in `tools/texture-manifest.json`. The script makes each texture tile seamlessly: it crops patterns like slabs and bricks to a whole number of repeats, and asks Gemini to repaint the seam when cropping isn't enough. It caches raw output and a cost ledger in `.texture-cache/`, which is gitignored, and stops before spending more than `--cap` (default $4.50). It needs Python 3 with Pillow and NumPy. Generated images carry Google's invisible SynthID watermark.
 
+## Vehicles
+
+Cars and trucks are from [Kenney's Car Kit](https://kenney.nl/assets/car-kit) (CC0, free; thanks Kenney). `tools/build-vehicles.py` converts the kit's GLB models into a single file, `assets/vehicles/vehicles.json` (378 KB of mesh data, stored as base64). The game repaints each body in its own car colours, while taxis, police cars, ambulances, garbage trucks and fire engines keep their livery. Glass is darkened, the lamps glow, police lights flash, and wrecks burn black. Faces the top-down camera never sees are dropped, and wheels become simple tyres, so a car is about 700 triangles. Buses and tankers aren't in the kit and stay box-built.
+
+```sh
+# download the kit from kenney.nl, unzip it, then:
+python3 tools/build-vehicles.py "/path/to/kenney_car-kit/Models/GLB format"
+```
+
 ## How it's built
 
 | File | Role |
@@ -108,6 +117,7 @@ Prompts are in `tools/texture-manifest.json`. The script makes each texture tile
 | `src/renderer.js` | WebGPU renderer: instanced meshes, cached shadow map, point lights, wet-street reflections, fog of war, decals, particles and beams |
 | `src/scene.js` | Turns the city into geometry and lights, in 10×10-tile chunks for frustum culling |
 | `src/textures.js` | Texture layers and how far each one repeats |
+| `src/vehicles.js` | Which vehicle model each car or truck gets |
 | `src/mapgen.js` | Procedural city, vehicles and enemy placement |
 | `src/map.js` | Tiles, height-aware line of sight, cover, pathfinding, destruction |
 | `src/game.js` | Turns, vision, stealth, combat, explosions, abilities |

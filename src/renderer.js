@@ -1,5 +1,6 @@
 import { mat4 } from './util.js';
 import { TEXTURES, T } from './textures.js';
+import { VEH } from './vehicles.js';
 
 export const MAX_LIGHTS = 32;
 const SHADOW_SIZE = 2048;
@@ -151,6 +152,46 @@ fn worldOf(v: VIn) -> array<vec3f, 2> {
   return array<vec3f, 2>(wp, n);
 }
 
+// ---------- vehicle models (tools/build-vehicles.py) ----------
+// position unorm16 in a unit box (x, z offset by 0.5), normal snorm8, colour unorm8 with the
+// vertex's role in alpha: 0 fixed, 1 paint, 2 glass, 3 headlight, 4 tail light, 5 siren
+struct VehIn {
+  @location(0) pos: vec4f, @location(1) nrm: vec4f, @location(6) col: vec4f,
+  @location(2) a: vec4f, @location(3) b: vec4f, @location(4) c: vec4f, @location(5) d: vec4f,
+};
+fn vehWorld(v: VehIn) -> array<vec3f, 2> {
+  let R = rotm(v.a.w, v.b.w, v.c.w);
+  let wp = R * ((v.pos.xyz - vec3f(0.5, 0.0, 0.5)) * v.b.xyz) + v.a.xyz;
+  let n = normalize(R * (v.nrm.xyz / v.b.xyz));
+  return array<vec3f, 2>(wp, n);
+}
+@vertex fn vsShadowVeh(v: VehIn) -> @builtin(position) vec4f {
+  return S.lightVP * vec4f(vehWorld(v)[0], 1.0);
+}
+@vertex fn vsVeh(v: VehIn) -> VOut {
+  let w = vehWorld(v);
+  var o: VOut;
+  o.clip = S.viewProj * vec4f(w[0], 1.0);
+  o.wpos = w[0]; o.nrm = w[1];
+  let role = i32(v.col.a * 255.0 / 40.0 + 0.5);
+  var col = v.col.rgb;
+  var m = vec4f(0.0, 0.0, v.d.z, 0.0);
+  if (role == 1) { col = v.c.xyz * v.col.rgb * 2.0; m.y = 8.0; }      // instance paint, kit shading
+  else if (role == 2) { col = vec3f(0.01, 0.016, 0.026); m.y = 3.0; } // dark glass
+  else if (role >= 3) {
+    var lc = vec3f(1.0, 0.92, 0.75); var k = 2.5;
+    if (role == 4) { lc = vec3f(1.0, 0.05, 0.03); k = 2.0; }
+    if (role == 5) { lc = vec3f(0.15, 0.35, 1.0); k = 3.0 * step(0.0, sin(S.info.z * 6.0 + v.d.w * 40.0)); }
+    col = lc; m.y = 4.0; m.x = k * v.d.x;
+  }
+  if (v.d.w > 1.5) { // burnt out
+    col = vec3f(0.012, 0.011, 0.01) * (0.6 + 2.0 * dot(v.col.rgb, vec3f(0.33)));
+    m = vec4f(0.0, 0.0, v.d.z, 0.0);
+  }
+  o.col = col; o.m = m;
+  return o;
+}
+
 @vertex fn vsMesh(v: VIn) -> VOut {
   let w = worldOf(v);
   var o: VOut;
@@ -266,6 +307,8 @@ fn shade(wp: vec3f, N: vec3f, base: vec3f, spec: f32, gloss: f32) -> vec3f {
     }
     // rain lingers in the joints of paving
     if (N.y > 0.5) { spec = mix(spec, 1.2, gCav * 0.7); gloss = mix(gloss, 90.0, gCav * 0.7); }
+  } else if (mat == 8) { // car paint
+    spec = 0.3; gloss = 60.0;
   } else if (tl >= 0) {
     base = base * detail(tl, wp, N, dx, dy, 0.85);
   }
@@ -569,6 +612,24 @@ export class Renderer {
       primitive: { topology: 'triangle-list', cullMode: 'none' },
       depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'less', depthBias: 2, depthBiasSlopeScale: 2.5 },
     });
+    const vehBuffers = (main) => [
+      { arrayStride: 16, attributes: [{ shaderLocation: 0, offset: 0, format: 'unorm16x4' }, { shaderLocation: 1, offset: 8, format: 'snorm8x4' },
+        ...(main ? [{ shaderLocation: 6, offset: 12, format: 'unorm8x4' }] : [])] },
+      meshBuffers[1],
+    ];
+    this.vehPipe = device.createRenderPipeline({
+      layout: mainLayout,
+      vertex: { module: mod, entryPoint: 'vsVeh', buffers: vehBuffers(true) },
+      fragment: { module: mod, entryPoint: 'fsMesh', targets: [{ format: this.format }] },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      depthStencil: ds(true), multisample: ms,
+    });
+    this.shadowVehPipe = device.createRenderPipeline({
+      layout: shadowLayout,
+      vertex: { module: mod, entryPoint: 'vsShadowVeh', buffers: vehBuffers(false) },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'less', depthBias: 2, depthBiasSlopeScale: 2.5 },
+    });
     const quadBuffers = (stride, n) => [
       { arrayStride: 8, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }] },
       { arrayStride: stride, stepMode: 'instance', attributes: Array.from({ length: n }, (_, k) => ({ shaderLocation: 1 + k, offset: k * 16, format: 'float32x4' })) },
@@ -617,7 +678,29 @@ export class Renderer {
     this.gpuBufs = {};
     this.fogTex = null;
     this.resize();
-    await this.loadTextures();
+    await Promise.all([this.loadTextures(), this.loadVehicles()]);
+  }
+
+  // Vehicle meshes: one vertex and index buffer per model. On failure VEH stays not ready and
+  // the scene falls back to box-built vehicles.
+  async loadVehicles() {
+    try {
+      const res = await fetch('assets/vehicles/vehicles.json');
+      if (!res.ok) throw new Error(res.status);
+      const idx = await res.json();
+      const raw = atob(idx.data), bin = new Uint8Array(raw.length);
+      for (let k = 0; k < raw.length; k++) bin[k] = raw.charCodeAt(k);
+      for (const [name, m] of Object.entries(idx.models)) {
+        const buf = this.device.createBuffer({ size: m.vertices * idx.stride, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+        this.device.queue.writeBuffer(buf, 0, bin.buffer, m.vertexOffset, m.vertices * idx.stride);
+        const isize = (m.indices * 2 + 3) & ~3;
+        const ibuf = this.device.createBuffer({ size: isize, usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST });
+        this.device.queue.writeBuffer(ibuf, 0, bin.buffer, m.indexOffset, isize);
+        this.meshes[name] = { buf, ibuf, count: m.indices, veh: true };
+        VEH.models[name] = m;
+      }
+      VEH.ready = true;
+    } catch (err) { console.warn('vehicle models not loaded', err); }
   }
 
   // Loads the surface textures into one texture array with mipmaps. A texture that fails to load
@@ -813,9 +896,15 @@ export class Renderer {
 
   drawRanges(pass, mesh, bufName, ranges) {
     if (!ranges.length) return;
-    pass.setVertexBuffer(0, this.meshes[mesh].buf);
+    const M = this.meshes[mesh];
+    pass.setVertexBuffer(0, M.buf);
     pass.setVertexBuffer(1, this.gpuBufs[bufName]);
-    for (const [start, n] of ranges) pass.draw(this.meshes[mesh].count, n, 0, start);
+    if (M.veh) {
+      pass.setIndexBuffer(M.ibuf, 'uint16');
+      for (const [start, n] of ranges) pass.drawIndexed(M.count, n, 0, 0, start);
+    } else {
+      for (const [start, n] of ranges) pass.draw(M.count, n, 0, start);
+    }
   }
 
   // frame: { viewProj, lightVP, camPos, camRight, camUp, mapW, mapH, time, moonDir, moonCol, ambient,
@@ -838,7 +927,7 @@ export class Renderer {
     const staticChanged = fr.staticVersion !== this.staticVersion;
     if (staticChanged) {
       this.staticVersion = fr.staticVersion;
-      for (const m of MESHES) this.upload('s_' + m, fr.staticSets[m].f, fr.staticSets[m].n * 64);
+      for (const m in fr.staticSets) this.upload('s_' + m, fr.staticSets[m].f, fr.staticSets[m].n * 64);
       this.upload('marks', fr.marks.f, fr.marks.n * 64);
     }
     for (const m of MESHES) { const s = fr.dynSets[m]; this.upload('d_' + m, s.f, s.n * 64); }
@@ -853,9 +942,12 @@ export class Renderer {
     // static shadows are rendered once per city change into a cache...
     if (staticChanged) {
       const pass = enc.beginRenderPass({ colorAttachments: [], depthStencilAttachment: { view: this.staticShadowView, depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' } });
-      pass.setPipeline(this.shadowPipe);
       pass.setBindGroup(0, this.shadowBG);
-      for (const m of MESHES) if (fr.objCount[m]) this.drawRanges(pass, m, 's_' + m, [[0, fr.objCount[m]]]);
+      for (const m in fr.objCount) {
+        if (!fr.objCount[m]) continue;
+        pass.setPipeline(this.meshes[m].veh ? this.shadowVehPipe : this.shadowPipe);
+        this.drawRanges(pass, m, 's_' + m, [[0, fr.objCount[m]]]);
+      }
       pass.end();
     }
     // ...then copied each frame, with only moving things drawn on top
@@ -878,6 +970,13 @@ export class Renderer {
       this.drawRanges(pass, m, 's_' + m, fr.draws[m]);
       if (fr.dynSets[m].n) this.drawRanges(pass, m, 'd_' + m, [[0, fr.dynSets[m].n]]);
     }
+    let veh = false;
+    for (const m in fr.draws) {
+      if (!this.meshes[m]?.veh || !fr.draws[m].length) continue;
+      if (!veh) { pass.setPipeline(this.vehPipe); veh = true; }
+      this.drawRanges(pass, m, 's_' + m, fr.draws[m]);
+    }
+    if (veh) pass.setPipeline(this.meshPipe);
     this.drawRanges(pass, 'box', 's_box', fr.draws.ground);
     pass.setPipeline(this.decalPipe);
     pass.setVertexBuffer(0, this.quadBuf);

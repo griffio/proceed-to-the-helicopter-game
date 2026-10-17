@@ -3,12 +3,14 @@ import { lin, hash2, scale3, mix3, mat4 } from './util.js';
 import { Instances, FlatList } from './renderer.js';
 import { DIR4 } from './map.js';
 import { tex } from './textures.js';
+import { VEH_MODELS, VEH, pickModel } from './vehicles.js';
 import { clamp } from './util.js';
 
 // Static geometry is grouped into 10x10-tile chunks so the renderer can skip off-screen ones.
 export const CH = 10, CHX = Math.ceil(MW / CH), CHZ = Math.ceil(MH / CH), NCH = CHX * CHZ;
 export const chunkIndex = (x, z) => clamp(Math.floor(z / CH), 0, CHZ - 1) * CHX + clamp(Math.floor(x / CH), 0, CHX - 1);
-const MESH = ['box', 'cyl', 'sph'];
+// vehicle models are static meshes too, chunked and culled like the rest
+const MESH = ['box', 'cyl', 'sph', ...VEH_MODELS];
 const append = (dst, src) => {
   while ((dst.n + src.n) * 16 > dst.f.length) dst.grow();
   dst.f.set(src.f.subarray(0, src.n * 16), dst.n * 16);
@@ -22,10 +24,15 @@ const GLASS = lin('#0c1622'), CHAR = [0.012, 0.011, 0.01];
 export class SceneBuilder {
   constructor() {
     this.sets = { box: new Instances(16384), cyl: new Instances(2048), sph: new Instances(1024) };
+    for (const m of VEH_MODELS) this.sets[m] = new Instances(64);
     this.dyn = { box: new Instances(2048), cyl: new Instances(512), sph: new Instances(512) };
     this.objCount = { box: 0, cyl: 0, sph: 0 };
     this.ranges = null;
-    this.chunks = Array.from({ length: NCH }, () => ({ box: new Instances(64), cyl: new Instances(16), sph: new Instances(16), ground: new Instances(128) }));
+    this.chunks = Array.from({ length: NCH }, () => {
+      const c = { box: new Instances(64), cyl: new Instances(16), sph: new Instances(16), ground: new Instances(128) };
+      for (const m of VEH_MODELS) c[m] = new Instances(4);
+      return c;
+    });
     this.version = -1;
     this.staticLights = [];
     this.marks = new FlatList(16, 4096);
@@ -34,7 +41,7 @@ export class SceneBuilder {
   chunkAt(x, z) { return this.chunks[chunkIndex(x, z)]; }
 
   buildStatic(map) {
-    for (const c of this.chunks) { c.box.clear(); c.cyl.clear(); c.sph.clear(); c.ground.clear(); }
+    for (const c of this.chunks) { for (const m of MESH) c[m].clear(); c.ground.clear(); }
     const lights = (this.staticLights = []);
     // ground is kept apart: it never casts shadows and is drawn last so early-z rejects hidden floor
     for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) {
@@ -268,12 +275,13 @@ export class SceneBuilder {
     }
     // concatenate chunks: [objects by chunk][ground by chunk], remembering each chunk's range
     const S = this.sets;
-    const R = (this.ranges = { box: [], cyl: [], sph: [], ground: [] });
+    const R = (this.ranges = { ground: [] });
+    for (const m of MESH) R[m] = [];
     for (const m of MESH) {
       S[m].clear();
       for (const c of this.chunks) { R[m].push([S[m].n, c[m].n]); append(S[m], c[m]); }
     }
-    this.objCount = { box: S.box.n, cyl: S.cyl.n, sph: S.sph.n };
+    this.objCount = Object.fromEntries(MESH.map((m) => [m, S[m].n]));
     for (const c of this.chunks) { R.ground.push([S.box.n, c.ground.n]); append(S.box, c.ground); }
     this.version = map.version;
   }
@@ -297,8 +305,18 @@ export class SceneBuilder {
   }
 
   vehicle(v) {
-    const { box, cyl } = this.chunkAt(v.cx, v.cy);
+    const chunk = this.chunkAt(v.cx, v.cy), { box, cyl } = chunk;
     const yaw = (v.horiz ? 0 : Math.PI / 2) + (v.flip ? Math.PI : 0);
+    const model = pickModel(v);
+    if (model) {
+      // scale to the footprint's length, keeping proportions, but never wider than the footprint
+      const [ml, mh, mw] = VEH.models[model].size;
+      const L = Math.max(v.sx, v.sy) - 0.08, W = Math.min(v.sx, v.sy) - 0.08, s = L / ml;
+      const tilt = v.wreck ? (v.seed - 0.5) * 0.12 : 0;
+      // instance: emissive = lamps on, seed > 1.5 = burnt-out wreck
+      chunk[model].add(v.cx, 0, v.cy, L, mh * s, Math.min(mw * s, W), yaw, lin(v.color), 0, v.wreck ? 0 : 1, 0, tilt, 0, v.wreck ? 2 : v.seed);
+      return;
+    }
     const fx = Math.cos(yaw), fz = Math.sin(yaw), rx = -fz, rz = fx;
     const at = (f, r) => [v.cx + fx * f + rx * r, v.cy + fz * f + rz * r];
     const wreck = v.wreck;
