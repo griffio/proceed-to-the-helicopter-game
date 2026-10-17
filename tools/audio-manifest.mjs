@@ -153,7 +153,6 @@ export const SFX = [
   ['ui_error', 'Short low UI error buzz', 0.5, false, 0.8],
   ['turn_player', 'Tense cinematic stinger, low synth pulse building, signaling your turn', 2, false, 0.5],
   ['turn_enemy', 'Ominous dark cinematic stinger, deep brass and taiko drum hit', 2, false, 0.5],
-  ['radio_click', 'Military radio push to talk click with short static burst', 0.5, false, 0.8],
   ['hunker', 'Soldier diving into cover, cloth rustle and gear thud', 0.8, false, 0.5],
   ['hydrant', 'Fire hydrant bursting, high pressure water spraying', 3, false, 0.6],
   ['victory', 'Triumphant cinematic military victory fanfare, short', 4, false, 0.5],

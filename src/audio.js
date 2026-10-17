@@ -92,9 +92,7 @@ export class Audio {
     if (world) {
       this.play(id, { vol: 1, pos: world, bus: this.voiceBus });
     } else {
-      this.play('radio_click', { vol: 0.35 });
-      this.play(id, { vol: 1, bus: this.radio, delay: 0.08 });
-      this.play('radio_click', { vol: 0.25, delay: b.duration + 0.1 });
+      this.play(id, { vol: 1, bus: this.radio });
     }
     this.voiceBusyUntil = now + b.duration + 0.25;
     return b.duration;
