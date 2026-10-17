@@ -6,6 +6,7 @@ import { SceneBuilder, lightMatrix, CH, CHX, CHZ, NCH } from './scene.js';
 import { Camera, FlatList } from './renderer.js';
 import { DIR4 } from './map.js';
 import { EnemyAI } from './ai.js';
+import { T } from './textures.js';
 
 const AGENT_HALF = 1.05, PERIPH = 2.5;
 const MOON_DIR = (() => { const v = [-0.55, 1.0, -0.35]; const l = Math.hypot(...v); return v.map((c) => c / l); })();
@@ -136,7 +137,7 @@ export class Game {
       u.rfacing += d * Math.min(1, dt * 12);
       if (!u.moving) u.ry = this.map.standH(this.idx(u.x, u.y));
     }
-    this.fx.update(dt, this.map, this.time);
+    this.fx.update(dt, this.map, this.time, this.view);
     // fog smoothing
     const fc = this.fogCur, v = this.visible, fd = this.fogData, ex = this.explored;
     const k = Math.min(1, dt * 7);
@@ -1232,13 +1233,13 @@ export class Game {
   // ---------- rendering ----------
   frame(renderer, cssW, cssH) {
     const m = this.map;
-    if (this.scene.version !== m.version) this.scene.buildStatic(m);
+    if (this.scene.version !== m.version) { this.scene.buildStatic(m); this.computeContactShadows(); }
     const cam = this.camera.matrices(cssW, cssH);
     const dyn = this.scene.dyn;
     dyn.box.clear(); dyn.cyl.clear(); dyn.sph.clear();
     const decals = this.decals; decals.clear();
     this.partsA.clear(); this.partsD.clear(); this.beams.clear();
-    const view = this.viewRect(cssW, cssH);
+    const view = (this.view = this.viewRect(cssW, cssH));
     const visible = this._visChunks || (this._visChunks = new Uint8Array(NCH));
     for (let cz = 0; cz < CHZ; cz++) for (let cx = 0; cx < CHX; cx++)
       visible[cz * CHX + cx] = (cx + 1) * CH > view[0] && cx * CH < view[2] && (cz + 1) * CH > view[1] && cz * CH < view[3] ? 1 : 0;
@@ -1257,11 +1258,7 @@ export class Game {
       decals.push(d.x + 0.5, 0.12, d.y + 0.5, 0, ITEMS.drone.r * 2, ITEMS.drone.r * 2, 9, 0, 0.3, 1, 0.5, 0.35, 0.02, 0, 1, 0);
       dynLights.push([d.rx, y - 1, d.rz, 6, 0.4, 1, 0.6, 1.2]);
     }
-    // fires light the scene
-    const fires = [];
-    for (const v of m.vehicles) if (v.wreck && v.tiles.some((t) => m.fire[t])) fires.push([v.cx, v.cy]);
-    for (let i = 0; i < m.n && fires.length < 14; i++) if (m.fire[i] && m.veh[i] < 0) fires.push([m.X(i) + 0.5, m.Y(i) + 0.5]);
-    for (const [x, z] of fires) dynLights.push([x, 1.4, z, 7, 1, 0.45, 0.12, 2.6 * (0.75 + 0.25 * Math.sin(this.time * 17 + x))]);
+    this.fireLights(dynLights, view);
     if (this.carAlarm && this.time < this.carAlarm.until) {
       const on = Math.sin(this.time * 12) > 0;
       if (on) dynLights.push([this.carAlarm.x, 1.2, this.carAlarm.z, 5, 1, 0.6, 0.1, 2.5]);
@@ -1276,6 +1273,41 @@ export class Game {
       draws: this.scene.drawRanges(visible), marks: this.scene.marks,
       dynSets: dyn, decals, partsAlpha: this.partsA, partsAdd: this.partsD, beams: this.beams,
     });
+  }
+
+  // Contact shadows: how much each tile blocks the light around its base, stored in the fog
+  // texture's blue channel. The shader samples it filtered, so the ground darkens smoothly
+  // toward walls, cars and props, fading out a metre or so up their sides.
+  computeContactShadows() {
+    const m = this.map, fd = this.fogData;
+    for (let i = 0; i < m.n; i++) {
+      const o = m.obj[i];
+      const h = o === O.BUILDING ? 3 : m.veh[i] >= 0 ? 1.6 : OBJ[o].h;
+      fd[i * 4 + 2] = Math.min(1, h / 1.5) * 255;
+    }
+  }
+
+  // Fires light the scene. Burning tiles are merged into one light per 4x4-tile cell, and only
+  // the few nearest the camera are kept, so a row of burning cars doesn't flood the light list.
+  fireLights(out, view) {
+    const m = this.map, C = 4, cw = Math.ceil(MW / C);
+    const acc = this._fireAcc || (this._fireAcc = new Float32Array(cw * Math.ceil(MH / C) * 3));
+    acc.fill(0);
+    const x0 = Math.max(0, Math.floor(view[0])), x1 = Math.min(MW - 1, Math.ceil(view[2]));
+    const z0 = Math.max(0, Math.floor(view[1])), z1 = Math.min(MH - 1, Math.ceil(view[3]));
+    for (let y = z0; y <= z1; y++) for (let x = x0; x <= x1; x++) {
+      if (!m.fire[y * MW + x]) continue;
+      const c = ((y / C) | 0) * cw + ((x / C) | 0);
+      acc[c * 3] += x + 0.5; acc[c * 3 + 1] += y + 0.5; acc[c * 3 + 2]++;
+    }
+    const cx = this.camera.tx, cz = this.camera.tz, found = [];
+    for (let c = 0; c < acc.length / 3; c++) {
+      const n = acc[c * 3 + 2];
+      if (n) { const x = acc[c * 3] / n, z = acc[c * 3 + 1] / n; found.push([(x - cx) ** 2 + (z - cz) ** 2, x, z, n]); }
+    }
+    found.sort((a, b) => a[0] - b[0]);
+    for (const [, x, z, n] of found.slice(0, 8))
+      out.push([x, 1.4, z, 6 + Math.min(3, n * 0.4), 1, 0.45, 0.12, 2.6 * (0.75 + 0.25 * Math.sin(this.time * 17 + x))]);
   }
 
   // World-space xz rectangle the camera can see: the frustum's footprint on the ground and at
@@ -1301,8 +1333,8 @@ export class Game {
   drawWorldDecals(decals) {
     const m = this.map;
     for (const s of m.stains) {
-      if (s.kind === 'scorch') decals.push(s.x, 0.11, s.z, s.seed * 6, s.s, s.s, 4, 0, 0.01, 0.01, 0.01, 0.8, 0, s.seed, 0, 0);
-      else decals.push(s.x, 0.11, s.z, s.seed * 6, s.s, s.s, 4, 0, 0.22, 0.0, 0.0, 0.75, 0, s.seed, 0, 0);
+      if (s.kind === 'scorch') decals.push(s.x, 0.11, s.z, s.seed * 6, s.s * 1.15, s.s * 1.15, 10, 0, 1, 1, 1, 0.85, T.scorch, s.seed, 0, 0);
+      else decals.push(s.x, 0.11, s.z, s.seed * 6, s.s * 1.4, s.s * 1.4, 10, 0, 0.75, 0.75, 0.75, 0.85, T.blood, s.seed, 0, 0);
     }
     const lz = this.lz;
     const pulse = 0.55 + 0.3 * Math.sin(this.time * 3);

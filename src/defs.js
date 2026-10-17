@@ -4,15 +4,15 @@ export const MW = 100, MH = 60;
 
 export const F = { ROAD: 0, SIDEWALK: 1, GRASS: 2, INTERIOR: 3, PARKING: 4, PLAZA: 5, DIRT: 6, HELIPAD: 7, ALLEY: 8 };
 export const FLOOR = [
-  { name: 'Road', col: '#1d2024', mat: 1, h: 0 },
-  { name: 'Sidewalk', col: '#55575b', mat: 6, h: 0.07 },
-  { name: 'Grass', col: '#1f3320', mat: 5, h: 0.04 },
-  { name: 'Interior', col: '#5a4434', mat: 6, h: 0.05 },
-  { name: 'Parking', col: '#26282c', mat: 1, h: 0 },
-  { name: 'Plaza', col: '#615a52', mat: 6, h: 0.06 },
-  { name: 'Dirt', col: '#3f3426', mat: 0, h: 0.02 },
-  { name: 'Helipad', col: '#3b4148', mat: 6, h: 0.09 },
-  { name: 'Alley', col: '#2c2a28', mat: 1, h: 0.02 },
+  { name: 'Road', col: '#1d2024', mat: 1, tex: 'asphalt', h: 0 },
+  { name: 'Sidewalk', col: '#55575b', mat: 6, tex: 'sidewalk', h: 0.07 },
+  { name: 'Grass', col: '#1f3320', mat: 5, tex: 'grass', h: 0.04 },
+  { name: 'Interior', col: '#5a4434', mat: 6, tex: 'floor', h: 0.05 },
+  { name: 'Parking', col: '#26282c', mat: 1, tex: 'asphalt', h: 0 },
+  { name: 'Plaza', col: '#615a52', mat: 6, tex: 'plaza', h: 0.06 },
+  { name: 'Dirt', col: '#3f3426', mat: 0, tex: 'dirt', h: 0.02 },
+  { name: 'Helipad', col: '#3b4148', mat: 6, tex: 'concrete', h: 0.09 },
+  { name: 'Alley', col: '#2c2a28', mat: 1, tex: 'asphalt', h: 0.02 },
 ];
 
 export const O = {

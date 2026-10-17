@@ -2,6 +2,7 @@ import { MW, MH, F, FLOOR, O } from './defs.js';
 import { lin, hash2, scale3, mix3, mat4 } from './util.js';
 import { Instances, FlatList } from './renderer.js';
 import { DIR4 } from './map.js';
+import { tex } from './textures.js';
 import { clamp } from './util.js';
 
 // Static geometry is grouped into 10x10-tile chunks so the renderer can skip off-screen ones.
@@ -41,7 +42,7 @@ export class SceneBuilder {
       if (map.obj[i] === O.BUILDING && map.bh[i] > 0) continue;
       const f = FLOOR[map.floor[i]];
       const v = 0.9 + hash2(x, y) * 0.2;
-      this.chunkAt(x, y).ground.add(x + 0.5, -0.3, y + 0.5, 1, 0.3 + f.h, 1, 0, scale3(lin(f.col), v), f.mat);
+      this.chunkAt(x, y).ground.add(x + 0.5, -0.3, y + 0.5, 1, 0.3 + f.h, 1, 0, scale3(lin(f.col), v), tex(f.mat, f.tex));
     }
 
     const bcol = (i) => { const b = map.buildings[map.bid[i]]; return b ? lin(b.color) : CONCRETE; };
@@ -50,6 +51,14 @@ export class SceneBuilder {
       if (m === 999) return CONCRETE;
       const b = map.buildings[m];
       return b ? mix3(lin(b.color), [0.5, 0.48, 0.45], 0.45) : CONCRETE;
+    };
+    // facade per building, wall material per owner, with the odd tag or fly-poster on top
+    const FACADES = ['brick', 'brick', 'concrete', 'stucco'];
+    const facade = (bid) => FACADES[Math.floor(hash2(bid * 7 + 3, 11) * FACADES.length)];
+    const wallBase = (i) => map.meta[i] === 999 || hash2(map.meta[i] * 3 + 1, 5) < 0.5 ? 'concrete' : 'brick';
+    const wallTex = (i, x, y) => {
+      const h = hash2(x * 5 + 2, y * 3 + 9);
+      return h < 0.16 ? 'graffiti' : h < 0.24 ? 'posters' : wallBase(i);
     };
     const along = (x, y) => {
       // wall orientation: true if the wall runs along x
@@ -65,41 +74,41 @@ export class SceneBuilder {
       switch (o) {
         case O.BUILDING: {
           const bh = map.bh[i];
-          box.add(cx, 0, cz, 1, bh, 1, 0, bcol(i), 2, 0, 0, 0, 0, (map.bid[i] * 0.137) % 1);
+          box.add(cx, 0, cz, 1, bh, 1, 0, bcol(i), tex(2, facade(map.bid[i])), 0, 0, 0, 0, (map.bid[i] * 0.137) % 1);
           if (map.roof[i]) {
             const c = scale3(bcol(i), 0.8);
             DIR4.forEach(([dx, dy]) => {
               const ni = map.inb(x + dx, y + dy) ? map.idx(x + dx, y + dy) : -1;
               if (ni >= 0 && map.isRoof(ni)) return;
-              box.add(cx + dx * 0.45, bh, cz + dy * 0.45, dx ? 0.1 : 1, 0.35, dy ? 0.1 : 1, 0, c, 6);
+              box.add(cx + dx * 0.45, bh, cz + dy * 0.45, dx ? 0.1 : 1, 0.35, dy ? 0.1 : 1, 0, c, tex(6, 'concrete'));
             });
           }
           break;
         }
-        case O.WALL: box.add(cx, 0, cz, 1, 2.7, 1, 0, wallCol(i), 6); break;
+        case O.WALL: box.add(cx, 0, cz, 1, 2.7, 1, 0, wallCol(i), tex(6, wallTex(i, x, y))); break;
         case O.WINDOW: {
-          const c = wallCol(i), ax = along(x, y);
-          box.add(cx, 0, cz, 1, 0.95, 1, 0, c, 6);
-          box.add(cx, 2.2, cz, 1, 0.5, 1, 0, c, 6);
-          if (ax) { box.add(cx - 0.47, 0.95, cz, 0.06, 1.25, 1, 0, c, 6); box.add(cx + 0.47, 0.95, cz, 0.06, 1.25, 1, 0, c, 6); }
-          else { box.add(cx, 0.95, cz - 0.47, 1, 1.25, 0.06, 0, c, 6); box.add(cx, 0.95, cz + 0.47, 1, 1.25, 0.06, 0, c, 6); }
+          const c = wallCol(i), ax = along(x, y), wm = tex(6, wallBase(i));
+          box.add(cx, 0, cz, 1, 0.95, 1, 0, c, wm);
+          box.add(cx, 2.2, cz, 1, 0.5, 1, 0, c, wm);
+          if (ax) { box.add(cx - 0.47, 0.95, cz, 0.06, 1.25, 1, 0, c, wm); box.add(cx + 0.47, 0.95, cz, 0.06, 1.25, 1, 0, c, wm); }
+          else { box.add(cx, 0.95, cz - 0.47, 1, 1.25, 0.06, 0, c, wm); box.add(cx, 0.95, cz + 0.47, 1, 1.25, 0.06, 0, c, wm); }
           if (map.glass[i]) box.add(cx, 0.95, cz, ax ? 0.94 : 0.06, 1.25, ax ? 0.06 : 0.94, 0, [0.05, 0.09, 0.14], 3, 0.12);
           break;
         }
         case O.RUBBLE:
           for (let k = 0; k < 4; k++) {
             const a = hash2(x * 11 + k, y * 13), b = hash2(x * 17, y * 5 + k);
-            box.add(x + 0.2 + a * 0.6, fh, y + 0.2 + b * 0.6, 0.3 + a * 0.3, 0.2 + b * 0.35, 0.3 + b * 0.3, a * 6, scale3(CONCRETE, 0.5 + b * 0.4), 0, 0, (a - 0.5) * 0.6, (b - 0.5) * 0.6);
+            box.add(x + 0.2 + a * 0.6, fh, y + 0.2 + b * 0.6, 0.3 + a * 0.3, 0.2 + b * 0.35, 0.3 + b * 0.3, a * 6, scale3(CONCRETE, 0.5 + b * 0.4), tex(0, 'concrete'), 0, (a - 0.5) * 0.6, (b - 0.5) * 0.6);
           }
           break;
-        case O.CRATE: box.add(cx, fh, cz, 0.82, 0.82, 0.82, h * 0.6, scale3(WOOD, 0.8 + h * 0.4)); break;
+        case O.CRATE: box.add(cx, fh, cz, 0.82, 0.82, 0.82, h * 0.6, scale3(WOOD, 0.8 + h * 0.4), tex(0, 'floor')); break;
         case O.CRATES:
-          box.add(cx, fh, cz, 0.9, 0.95, 0.9, h * 0.3, scale3(WOOD, 0.8 + h * 0.3));
-          box.add(cx + 0.05, fh + 0.95, cz - 0.05, 0.8, 0.95, 0.8, h * 0.7 + 0.2, scale3(WOOD, 0.7 + h * 0.3));
+          box.add(cx, fh, cz, 0.9, 0.95, 0.9, h * 0.3, scale3(WOOD, 0.8 + h * 0.3), tex(0, 'floor'));
+          box.add(cx + 0.05, fh + 0.95, cz - 0.05, 0.8, 0.95, 0.8, h * 0.7 + 0.2, scale3(WOOD, 0.7 + h * 0.3), tex(0, 'floor'));
           break;
         case O.BARRIER: {
           const ax = along(x, y) || !map.inb(x, y - 1) || map.obj[map.idx(x, y - 1)] !== O.BARRIER;
-          box.add(cx, fh, cz, ax ? 0.98 : 0.45, 0.9, ax ? 0.45 : 0.98, 0, lin('#9a9890'), 6);
+          box.add(cx, fh, cz, ax ? 0.98 : 0.45, 0.9, ax ? 0.45 : 0.98, 0, lin('#9a9890'), tex(6, 'concrete'));
           box.add(cx, fh + 0.6, cz, ax ? 0.99 : 0.47, 0.12, ax ? 0.47 : 0.99, 0, lin('#b02a1e'), 0, 0.2);
           break;
         }
@@ -108,8 +117,8 @@ export class SceneBuilder {
           box.add(cx, fh + 0.45, cz, 0.85, 0.42, 0.7, 0.1, lin('#8a7b58'));
           break;
         case O.DUMPSTER:
-          box.add(cx, fh, cz, 0.95, 1.15, 0.8, 0, lin('#1f4a2c'));
-          box.add(cx, fh + 1.15, cz, 0.97, 0.08, 0.82, 0, lin('#163420'));
+          box.add(cx, fh, cz, 0.95, 1.15, 0.8, 0, lin('#1f4a2c'), tex(0, 'metal'));
+          box.add(cx, fh + 1.15, cz, 0.97, 0.08, 0.82, 0, lin('#163420'), tex(0, 'metal'));
           break;
         case O.BARREL:
           cyl.add(cx, fh, cz, 0.62, 1.0, 0.62, 0, lin('#9a1f16'));
@@ -148,15 +157,15 @@ export class SceneBuilder {
           box.add(cx, fh + 0.42, cz + 0.18, 0.9, 0.3, 0.06, 0, WOOD);
           break;
         case O.STATUE:
-          box.add(cx, fh, cz, 0.95, 1.0, 0.95, 0, lin('#77756c'), 6);
+          box.add(cx, fh, cz, 0.95, 1.0, 0.95, 0, lin('#77756c'), tex(6, 'concrete'));
           cyl.add(cx, fh + 1.0, cz, 0.42, 1.6, 0.42, 0, lin('#4d5a46'), 0);
           sph.add(cx, fh + 2.55, cz, 0.38, 0.38, 0.38, 0, lin('#4d5a46'));
           box.add(cx + 0.25, fh + 2.0, cz, 0.6, 0.12, 0.12, 0.8, lin('#4d5a46'), 0, 0, 0.9);
           break;
         case O.CONTAINER: {
           const c = lin(CONTAINER_COLS[map.meta[i] % CONTAINER_COLS.length]);
-          box.add(cx, fh, cz, 1.0, 2.6, 1.0, 0, c);
-          box.add(cx, fh + 2.6, cz, 0.94, 0.04, 0.94, 0, scale3(c, 0.7));
+          box.add(cx, fh, cz, 1.0, 2.6, 1.0, 0, c, tex(0, 'metal'));
+          box.add(cx, fh + 2.6, cz, 0.94, 0.04, 0.94, 0, scale3(c, 0.7), tex(0, 'metal'));
           break;
         }
         case O.DESK:
@@ -165,11 +174,11 @@ export class SceneBuilder {
           break;
         case O.SHELF: box.add(cx, fh, cz, 0.95, 2.0, 0.55, along(x, y) ? 0 : Math.PI / 2, lin('#4a4d52')); break;
         case O.PLANTER:
-          box.add(cx, fh, cz, 0.9, 0.7, 0.9, 0, CONCRETE, 6);
+          box.add(cx, fh, cz, 0.9, 0.7, 0.9, 0, CONCRETE, tex(6, 'concrete'));
           box.add(cx, fh + 0.7, cz, 0.75, 0.25, 0.75, 0, lin('#2c4a22'), 5);
           break;
         case O.KIOSK:
-          box.add(cx, fh, cz, 0.95, 2.2, 0.95, 0, lin('#35505a'));
+          box.add(cx, fh, cz, 0.95, 2.2, 0.95, 0, lin('#35505a'), tex(0, 'metal'));
           box.add(cx, fh + 1.6, cz, 0.97, 0.3, 0.97, 0, [1, 0.8, 0.3], 4, 1.5);
           break;
       }

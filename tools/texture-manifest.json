@@ -1,0 +1,102 @@
+{
+ "style": "Seamless tileable texture. Albedo colour map photographed perfectly straight on (orthographic, no perspective, no horizon), flat even diffuse lighting with no cast shadows, no highlights, no vignette. The surface fills the whole square edge to edge with no border, frame, text or watermark. Gritty, slightly stylised realism for a top-down tactics game set in a run-down city. Details are small and evenly spread across the whole image with no single large feature, so the texture can repeat many times without an obvious pattern.",
+ "textures": [
+  {
+   "id": "asphalt",
+   "tile": true,
+   "fix": false,
+   "prompt": "Dark grey city road asphalt with fine stone aggregate, evenly worn, subtle fine hairline cracks, faint scattered oil spots and a few small glossy tar-sealed crack lines."
+  },
+  {
+   "id": "sidewalk",
+   "tile": true,
+   "fix": true,
+   "prompt": "Light grey concrete sidewalk made of square paving slabs laid in a straight 4 by 4 grid aligned with the image edges, thin dark joints, weathered surface with chewing-gum spots, hairline cracks and grime in the joints.",
+   "crop": true
+  },
+  {
+   "id": "plaza",
+   "tile": true,
+   "fix": true,
+   "prompt": "City plaza paving of small rectangular granite setts in a running bond, warm grey, beige and charcoal stones of slightly varied tone, worn smooth, dirt in the joints.",
+   "crop": true
+  },
+  {
+   "id": "floor",
+   "tile": true,
+   "fix": true,
+   "prompt": "Worn interior wooden floorboards, dark varnished planks running horizontally with staggered end joints, scuffs, scratches and dusty patches.",
+   "crop": true
+  },
+  {
+   "id": "grass",
+   "tile": true,
+   "fix": false,
+   "prompt": "Unkempt dark green urban grass seen from above, clumps of clover and small weeds, a few patches of bare dirt and fallen leaves."
+  },
+  {
+   "id": "dirt",
+   "tile": true,
+   "fix": false,
+   "prompt": "Compacted brown muddy dirt ground seen from above, scattered gravel and small stones, faint dried puddle stains."
+  },
+  {
+   "id": "brick",
+   "tile": true,
+   "fix": true,
+   "prompt": "Old red-brown brick building wall, bricks in running bond with light grey mortar lines, about 14 courses of brick from top to bottom, some sooty and water-stained bricks, a few chipped bricks.",
+   "crop": true
+  },
+  {
+   "id": "concrete",
+   "tile": true,
+   "fix": true,
+   "prompt": "Grey precast concrete wall panels with thin panel joints and small round formwork tie holes in a regular grid, vertical rain streaks and water stains.",
+   "crop": true
+  },
+  {
+   "id": "stucco",
+   "tile": true,
+   "fix": false,
+   "prompt": "Weathered painted plaster stucco wall in a pale neutral colour, fine hairline cracks, damp stains, small patches of peeling paint revealing grey render underneath."
+  },
+  {
+   "id": "roof",
+   "tile": true,
+   "fix": false,
+   "prompt": "Flat building rooftop seen from above, black bitumen membrane covered with even grey gravel ballast and a few small bare patches."
+  },
+  {
+   "id": "metal",
+   "tile": true,
+   "fix": true,
+   "prompt": "Corrugated painted steel sheet with evenly spaced vertical ribs running top to bottom, scratched paint, dents and orange rust streaks running downward.",
+   "crop": true
+  },
+  {
+   "id": "graffiti",
+   "tile": true,
+   "fix": true,
+   "prompt": "Grimy concrete city wall densely covered in colourful street graffiti: overlapping spray-paint tags, bubble-letter throw-ups and drips, in vivid magenta, cyan, yellow and white. The lettering is stylised and illegible, not real words."
+  },
+  {
+   "id": "posters",
+   "tile": true,
+   "fix": true,
+   "prompt": "City wall covered in layered, torn and rain-weathered fly-posters and bills pasted over each other, peeling corners and glue stains. The posters show only abstract bold shapes, stripes and blocks of colour with illegible gibberish lettering, no real words or logos."
+  },
+  {
+   "id": "scorch",
+   "tile": false,
+   "decal": true,
+   "prompt": "A single black soot scorch mark left by an explosion, seen from directly above, on a pure white background. Radial burst of soot streaks with an irregular jagged outline and a darker charred centre. The mark is centred and does not touch the image edges. Nothing else in the image.",
+   "soften": 10
+  },
+  {
+   "id": "blood",
+   "tile": false,
+   "decal": true,
+   "prompt": "A single dark red blood splatter seen from directly above, on a pure white background: a central pool with smaller droplets and splashes radiating outward. Centred, not touching the image edges. Nothing else in the image."
+  }
+ ]
+}

@@ -1,8 +1,50 @@
 import { mat4 } from './util.js';
+import { TEXTURES, T } from './textures.js';
 
 export const MAX_LIGHTS = 32;
 const SHADOW_SIZE = 2048;
 const SAMPLES = 4;
+const BLOOM_LEVELS = 5;   // half resolution down to 1/32
+const BLOOM_THRESHOLD = 0.62, BLOOM_KNEE = 0.3, BLOOM_STRENGTH = 0.65;
+
+// Bloom: threshold the resolved frame into a half-res target, blur it down a mip chain and back
+// up (dual filtering), then add it over the frame on the way to the screen.
+const POST_WGSL = /* wgsl */ `
+struct U { px: vec2f, a: f32, b: f32 };
+@group(0) @binding(0) var src: texture_2d<f32>;
+@group(0) @binding(1) var smp: sampler;
+@group(0) @binding(2) var<uniform> u: U;
+@group(0) @binding(3) var scene: texture_2d<f32>;
+struct VO { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
+@vertex fn vsFull(@builtin(vertex_index) i: u32) -> VO {
+  let p = vec2f(f32((i << 1u) & 2u), f32(i & 2u));
+  var o: VO;
+  o.pos = vec4f(p * 2.0 - 1.0, 0.0, 1.0);
+  o.uv = vec2f(p.x, 1.0 - p.y);
+  return o;
+}
+fn tap(uv: vec2f) -> vec3f { return textureSampleLevel(src, smp, uv, 0.0).rgb; }
+fn down(uv: vec2f) -> vec3f {
+  let d = u.px;
+  return (tap(uv) * 4.0 + tap(uv - d) + tap(uv + d) + tap(uv + vec2f(d.x, -d.y)) + tap(uv - vec2f(d.x, -d.y))) / 8.0;
+}
+@fragment fn fsPrefilter(v: VO) -> @location(0) vec4f {
+  let c = pow(down(v.uv), vec3f(2.2));            // the frame is display-encoded; work in linear
+  let l = max(c.r, max(c.g, c.b));
+  return vec4f(c * smoothstep(u.a, u.a + u.b, l), 1.0);
+}
+@fragment fn fsDown(v: VO) -> @location(0) vec4f { return vec4f(down(v.uv), 1.0); }
+@fragment fn fsUp(v: VO) -> @location(0) vec4f {
+  let d = u.px;
+  var c = tap(v.uv + vec2f(-2.0 * d.x, 0.0)) + tap(v.uv + vec2f(2.0 * d.x, 0.0)) + tap(v.uv + vec2f(0.0, -2.0 * d.y)) + tap(v.uv + vec2f(0.0, 2.0 * d.y));
+  c += (tap(v.uv + d) + tap(v.uv - d) + tap(v.uv + vec2f(d.x, -d.y)) + tap(v.uv - vec2f(d.x, -d.y))) * 2.0;
+  return vec4f(c / 12.0, 1.0);
+}
+@fragment fn fsComposite(v: VO) -> @location(0) vec4f {
+  let c = pow(textureSampleLevel(scene, smp, v.uv, 0.0).rgb, vec3f(2.2)) + tap(v.uv) * u.a;
+  return vec4f(pow(min(c, vec3f(1.0)), vec3f(1.0 / 2.2)), 1.0);
+}
+`;
 
 const WGSL = /* wgsl */ `
 struct Light { pos: vec4f, col: vec4f };
@@ -23,6 +65,44 @@ struct Scene {
 @group(0) @binding(2) var linSamp: sampler;
 @group(0) @binding(3) var shadowTex: texture_depth_2d;
 @group(0) @binding(4) var shadowSamp: sampler_comparison;
+// one texel per map tile: bit i is set if light i can reach that tile
+@group(0) @binding(5) var lightMask: texture_2d<u32>;
+@group(0) @binding(6) var texArr: texture_2d_array<f32>;
+@group(0) @binding(7) var texSamp: sampler;
+// per layer: average linear colour (x < 0 = not loaded), world units per repeat
+@group(0) @binding(8) var<uniform> TI: array<vec4f, 16>;
+// per layer: tangent-space normal (rgb) and cavity (a: high in grooves, where rain collects)
+@group(0) @binding(9) var normArr: texture_2d_array<f32>;
+// detail() also leaves the surface's bumped normal and cavity here for the lighting
+var<private> gN: vec3f;
+var<private> gCav: f32;
+
+// World-space projection for axis-aligned boxes: tops use xz, sides use their own plane.
+fn texProj(p: vec3f, N: vec3f) -> vec2f {
+  if (abs(N.y) > 0.5) { return p.xz; }
+  if (abs(N.x) > abs(N.z)) { return vec2f(p.z, -p.y); }
+  return vec2f(p.x, -p.y);
+}
+// Texture as a detail map: divided by its own average, so the instance colour sets the overall
+// tone and the texture only adds pattern. k blends from flat (0) to full detail (1).
+fn detail(layer: i32, wp: vec3f, N: vec3f, dx: vec3f, dy: vec3f, k: f32) -> vec3f {
+  var l = layer;
+  if (l >= ${T.brick} && l <= ${T.posters} && N.y > 0.5) { l = ${T.concrete}; } // wall tops
+  if (l < 0) { return vec3f(1.0); }
+  let t = TI[l];
+  if (t.x < 0.0) { return vec3f(1.0); }
+  let s = 1.0 / t.w;
+  let uv = texProj(wp, N) * s; let gx = texProj(dx, N) * s; let gy = texProj(dy, N) * s;
+  let c = textureSampleGrad(texArr, texSamp, uv, l, gx, gy).rgb;
+  let nm = textureSampleGrad(normArr, texSamp, uv, l, gx, gy);
+  // tangent frame of texProj: T and B are the world directions of +u and +v
+  var T = vec3f(1.0, 0.0, 0.0); var B = vec3f(0.0, -1.0, 0.0);
+  if (abs(N.y) > 0.5) { B = vec3f(0.0, 0.0, 1.0); } else if (abs(N.x) > abs(N.z)) { T = vec3f(0.0, 0.0, 1.0); }
+  let tn = nm.xyz * 2.0 - 1.0;
+  gN = normalize(T * tn.x + B * tn.y + N * tn.z);
+  gCav = nm.w;
+  return mix(vec3f(1.0), min(c / t.rgb, vec3f(2.5)), k);
+}
 
 fn h2(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
 fn h3(p: vec3f) -> f32 { return fract(sin(dot(p, vec3f(127.1, 311.7, 74.7))) * 43758.5453); }
@@ -37,6 +117,7 @@ fn applyFog(c: vec3f, f: vec2f) -> vec3f {
   let unseen = vec3f(0.004, 0.005, 0.009);
   return mix(mix(unseen, mem, f.y), c, f.x);
 }
+fn aoAt(xz: vec2f) -> f32 { return textureSampleLevel(fogTex, linSamp, xz / S.info.xy, 0.0).b; }
 fn tonemap(c: vec3f) -> vec3f {
   let t = vec3f(1.0) - exp(-c * 1.5);
   return pow(t, vec3f(1.0 / 2.2));
@@ -99,9 +180,12 @@ fn shade(wp: vec3f, N: vec3f, base: vec3f, spec: f32, gloss: f32) -> vec3f {
   var diff = S.ambient.rgb * (0.55 + 0.45 * N.y);
   diff += S.moonCol.rgb * max(dot(N, Ld), 0.0) * sh;
   var sp = S.moonCol.rgb * pow(max(dot(N, normalize(Ld + V)), 0.0), gloss) * spec * sh;
-  let nl = i32(S.info.w);
-  for (var i = 0; i < nl; i++) {
-    let L = S.lights[i];
+  let cell = clamp(vec2i(floor(wp.xz)), vec2i(0), vec2i(S.info.xy) - 1);
+  var mask = textureLoad(lightMask, cell, 0).r;
+  loop {
+    if (mask == 0u) { break; }
+    let L = S.lights[firstTrailingBit(mask)];
+    mask &= mask - 1u;
     let d = L.pos.xyz - wp;
     let dist = length(d);
     let att = clamp(1.0 - dist / L.pos.w, 0.0, 1.0);
@@ -115,24 +199,31 @@ fn shade(wp: vec3f, N: vec3f, base: vec3f, spec: f32, gloss: f32) -> vec3f {
 }
 
 @fragment fn fsMesh(i: VOut) -> @location(0) vec4f {
+  // derivatives up front, while control flow is still uniform
+  let dx = dpdx(i.wpos); let dy = dpdy(i.wpos);
   var fog = vec2f(1.0);
   if (i.m.z < 0.5) {
     fog = fogAt(i.wpos.xz);
     if (fog.x + fog.y < 0.004) { return vec4f(tonemap(applyFog(vec3f(0.0), fog)), 1.0); }
   }
-  let mat = i32(i.m.y + 0.5);
+  let mat = i32(i.m.y + 0.5) & 15;
+  let tl = (i32(i.m.y + 0.5) >> 4) - 1;
   var base = i.col;
   let N = normalize(i.nrm);
   var spec = 0.06;
   var gloss = 12.0;
   var emis = vec3f(0.0);
   let wp = i.wpos;
+  gN = N; gCav = 0.0;
   if (mat == 1) {
     let pud = smoothstep(0.5, 0.8, noise2(wp.xz * 0.45 + vec2f(3.1, 7.7)));
-    let grit = 0.85 + 0.3 * h2(floor(wp.xz * 6.0));
-    base = base * mix(grit, 0.55, pud);
-    spec = mix(0.5, 1.6, pud);
-    gloss = mix(28.0, 120.0, pud);
+    var grit = vec3f(0.85 + 0.3 * h2(floor(wp.xz * 6.0)));
+    if (tl >= 0) { grit = detail(tl, wp, N, dx, dy, 0.9); }
+    base = base * mix(grit, vec3f(0.55), pud);
+    let wet = max(pud, gCav * 0.6);
+    spec = mix(0.5, 1.6, wet);
+    gloss = mix(28.0, 120.0, wet);
+    gN = normalize(mix(gN, N, pud)); // standing water is flat
   } else if (mat == 2) {
     if (abs(N.y) < 0.5) {
       let u = select(wp.x, wp.z, abs(N.x) > 0.5);
@@ -147,9 +238,14 @@ fn shade(wp: vec3f, N: vec3f, base: vec3f, spec: f32, gloss: f32) -> vec3f {
         if (h > 0.76) {
           emis = select(vec3f(1.0, 0.6, 0.28), vec3f(0.45, 0.7, 1.0), h > 0.93) * (0.35 + 0.3 * h2(vec2f(h, 1.0)));
         }
+      } else if (tl >= 0) {
+        base = base * detail(tl, wp, N, dx, dy, 0.85);
       } else {
         base = base * (0.85 + 0.15 * h2(floor(vec2f(gu, gv * 3.0))));
       }
+    } else if (tl >= 0) {
+      base = base * 0.5 * detail(${T.roof}, wp, N, dx, dy, 0.9);
+      spec = 0.2;
     } else {
       base = base * 0.5 * (0.85 + 0.3 * noise2(wp.xz * 2.0));
       spec = 0.2;
@@ -157,14 +253,26 @@ fn shade(wp: vec3f, N: vec3f, base: vec3f, spec: f32, gloss: f32) -> vec3f {
   } else if (mat == 3) {
     spec = 1.4; gloss = 100.0;
   } else if (mat == 5) {
-    base = base * (0.75 + 0.5 * noise2(wp.xz * 3.0));
+    if (tl >= 0) { base = base * detail(tl, wp, N, dx, dy, 0.9); }
+    else { base = base * (0.75 + 0.5 * noise2(wp.xz * 3.0)); }
   } else if (mat == 6) {
-    base = base * (0.88 + 0.24 * h2(floor(wp.xz * 2.0)));
     spec = 0.35; gloss = 26.0;
-    let seam = step(0.94, fract(wp.x)) + step(0.94, fract(wp.z));
-    base = base * (1.0 - 0.25 * min(seam, 1.0));
+    if (tl >= 0) {
+      base = base * detail(tl, wp, N, dx, dy, 0.85);
+    } else {
+      base = base * (0.88 + 0.24 * h2(floor(wp.xz * 2.0)));
+      let seam = step(0.94, fract(wp.x)) + step(0.94, fract(wp.z));
+      base = base * (1.0 - 0.25 * min(seam, 1.0));
+    }
+    // rain lingers in the joints of paving
+    if (N.y > 0.5) { spec = mix(spec, 1.2, gCav * 0.7); gloss = mix(gloss, 90.0, gCav * 0.7); }
+  } else if (tl >= 0) {
+    base = base * detail(tl, wp, N, dx, dy, 0.85);
   }
-  var col = shade(wp, N, base, spec, gloss) + emis + i.col * i.m.x;
+  // contact shadow: darken toward occupied neighbouring tiles, fading out with height
+  let occ = smoothstep(0.0, 0.6, aoAt(wp.xz)) * clamp(1.0 - wp.y / 1.1, 0.0, 1.0);
+  base = base * (1.0 - 0.6 * occ);
+  var col = shade(wp, gN, base, spec, gloss) + emis + i.col * i.m.x;
   if (mat == 4) { col = i.col * i.m.x; }
   if (i.m.z < 0.5) { col = applyFog(col, fog); }
   return vec4f(tonemap(col), 1.0);
@@ -189,7 +297,9 @@ struct DOut {
   return o;
 }
 @fragment fn fsDecal(v: DOut) -> @location(0) vec4f {
+  let duvx = dpdx(v.uv) * 0.5; let duvy = dpdy(v.uv) * 0.5;
   let shape = i32(v.sz.z + 0.5);
+  var tcol = vec3f(1.0);
   let uv = v.uv;
   let r = length(uv);
   let e = max(abs(uv.x), abs(uv.y));
@@ -230,8 +340,13 @@ struct DOut {
     let ang = atan2(uv.y, uv.x) + t * 0.6;
     a = (1.0 - smoothstep(0.0, v.p.x, abs(r - (1.0 - v.p.x)))) * step(0.0, sin(ang * 12.0));
   }
+  else if (shape == 10) {
+    // texture-array decal (scorch, blood); layer in p.x. Decals output display-space colour.
+    let tc = textureSampleGrad(texArr, texSamp, v.uv * 0.5 + 0.5, i32(v.p.x + 0.5), duvx, duvy);
+    a = tc.a; tcol = pow(tc.rgb, vec3f(1.0 / 2.2));
+  }
   if (a <= 0.004) { discard; }
-  var col = v.col.rgb;
+  var col = v.col.rgb * tcol;
   var fa = 1.0;
   if (v.p.z < 0.5) {
     let f = fogAt(v.wp.xz);
@@ -361,9 +476,12 @@ export class Instances {
 export class FlatList {
   constructor(stride, cap = 512) { this.s = stride; this.f = new Float32Array(cap * stride); this.n = 0; }
   clear() { this.n = 0; }
-  push(...vals) {
-    if ((this.n + 1) * this.s > this.f.length) { const f = new Float32Array(this.f.length * 2); f.set(this.f); this.f = f; }
-    this.f.set(vals, this.n++ * this.s);
+  // reads `arguments` rather than a rest array, so the hundreds of pushes per frame allocate nothing
+  push() {
+    const s = this.s;
+    if ((this.n + 1) * s > this.f.length) { const f = new Float32Array(this.f.length * 2); f.set(this.f); this.f = f; }
+    const f = this.f, o = this.n++ * s;
+    for (let k = 0; k < s; k++) f[o + k] = arguments[k];
   }
 }
 export const MESHES = ['box', 'cyl', 'sph'];
@@ -414,6 +532,11 @@ export class Renderer {
       { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
       { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'depth' } },
       { binding: 4, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'comparison' } },
+      { binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'uint' } },
+      { binding: 6, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float', viewDimension: '2d-array' } },
+      { binding: 7, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+      { binding: 8, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+      { binding: 9, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float', viewDimension: '2d-array' } },
     ] });
     const shadowBGL = device.createBindGroupLayout({ entries: [
       { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform' } },
@@ -471,9 +594,67 @@ export class Renderer {
       primitive: { topology: 'triangle-list' }, depthStencil: ds(false), multisample: ms,
     });
 
+    const post = device.createShaderModule({ code: POST_WGSL });
+    post.getCompilationInfo?.().then((info) => { for (const m of info.messages) if (m.type === 'error') console.error('WGSL post', m.lineNum, m.message); });
+    this.postBGL = device.createBindGroupLayout({ entries: [
+      { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+      { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+      { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+      { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+    ] });
+    const postLayout = device.createPipelineLayout({ bindGroupLayouts: [this.postBGL] });
+    const postPipe = (entry, format, blend) => device.createRenderPipeline({
+      layout: postLayout, vertex: { module: post, entryPoint: 'vsFull' },
+      fragment: { module: post, entryPoint: entry, targets: [{ format, blend }] }, primitive: { topology: 'triangle-list' },
+    });
+    this.bloomPipes = {
+      prefilter: postPipe('fsPrefilter', 'rgba16float'),
+      down: postPipe('fsDown', 'rgba16float'),
+      up: postPipe('fsUp', 'rgba16float', oneBlend),
+      composite: postPipe('fsComposite', this.format),
+    };
+
     this.gpuBufs = {};
     this.fogTex = null;
     this.resize();
+    await this.loadTextures();
+  }
+
+  // Loads the surface textures into one texture array with mipmaps. A texture that fails to load
+  // is flagged in texInfo and the shader falls back to the untextured look for it.
+  async loadTextures() {
+    const d = this.device, S = 512, levels = 10;
+    this.texArr = d.createTexture({ size: [S, S, TEXTURES.length], format: 'rgba8unorm-srgb', mipLevelCount: levels,
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT });
+    this.texSamp = d.createSampler({ addressModeU: 'repeat', addressModeV: 'repeat', magFilter: 'linear', minFilter: 'linear', mipmapFilter: 'linear', maxAnisotropy: 8 });
+    this.normArr = d.createTexture({ size: [S, S, TEXTURES.length], format: 'rgba8unorm', mipLevelCount: levels, usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+    const info = new Float32Array(16 * 4);
+    const lin = (c) => { c /= 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+    const canvas = (n) => (typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(n, n) : Object.assign(document.createElement('canvas'), { width: n, height: n }));
+    await Promise.all(TEXTURES.map(async ([id, scale, bump], k) => {
+      info.set([-1, -1, -1, scale], k * 4);
+      let flat = true;
+      try {
+        const res = await fetch(`assets/textures/${id}.webp`);
+        if (!res.ok) throw new Error(res.status);
+        let src = await createImageBitmap(await res.blob());
+        for (let l = 0, n = S; l < levels; l++, n >>= 1) {
+          const c = canvas(n), g = c.getContext('2d');
+          g.drawImage(src, 0, 0, n, n);
+          if (l === 0 && bump) { this.writeNormals(k, g.getImageData(0, 0, n, n).data, n, bump, levels); flat = false; }
+          d.queue.copyExternalImageToTexture({ source: c }, { texture: this.texArr, origin: [0, 0, k], mipLevel: l }, [n, n]);
+          if (n === 8) {
+            const px = g.getImageData(0, 0, 8, 8).data, avg = [0, 0, 0];
+            for (let p = 0; p < px.length; p += 4) for (let ch = 0; ch < 3; ch++) avg[ch] += lin(px[p + ch]) / 64;
+            info.set(avg, k * 4);
+          }
+          src = c;
+        }
+      } catch (err) { console.warn(`texture ${id} not loaded`, err); }
+      if (flat) this.writeNormals(k, null, S, 0, levels);
+    }));
+    this.texInfo = d.createBuffer({ size: info.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    d.queue.writeBuffer(this.texInfo, 0, info);
   }
 
   // Grow-on-demand GPU buffer keyed by name.
@@ -491,15 +672,85 @@ export class Renderer {
     if (!this.fogTex) {
       this.fogTex = this.device.createTexture({ size: [w, h], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
       this.fogW = w; this.fogH = h;
+      this.maskTex = this.device.createTexture({ size: [w, h], format: 'r32uint', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+      this.mask = new Uint32Array(w * h);
       this.mainBG = this.device.createBindGroup({ layout: this.mainBGL, entries: [
         { binding: 0, resource: { buffer: this.ubuf } },
         { binding: 1, resource: this.fogTex.createView() },
         { binding: 2, resource: this.linSamp },
         { binding: 3, resource: this.shadowView },
         { binding: 4, resource: this.cmpSamp },
+        { binding: 5, resource: this.maskTex.createView() },
+        { binding: 6, resource: this.texArr.createView({ dimension: '2d-array' }) },
+        { binding: 7, resource: this.texSamp },
+        { binding: 8, resource: { buffer: this.texInfo } },
+        { binding: 9, resource: this.normArr.createView({ dimension: '2d-array' }) },
       ] });
     }
     this.device.queue.writeTexture({ texture: this.fogTex }, data, { bytesPerRow: w * 4 }, [w, h]);
+  }
+
+  // Normal map from a texture's brightness: high-passed so broad stains don't read as dents,
+  // scaled by its own contrast so `bump` means the same for every texture. Alpha holds cavity.
+  // Mips are box-filtered here rather than through a canvas, which would premultiply the alpha.
+  writeNormals(layer, px, n, bump, levels) {
+    let out = new Uint8Array(n * n * 4);
+    if (!px) {
+      for (let p = 0; p < n * n; p++) out.set([128, 128, 255, 0], p * 4);
+    } else {
+      const N = n * n, lum = new Float32Array(N), tmp = new Float32Array(N), blur = new Float32Array(N), R = 8;
+      for (let p = 0; p < N; p++) lum[p] = (0.3 * px[p * 4] + 0.59 * px[p * 4 + 1] + 0.11 * px[p * 4 + 2]) / 255;
+      // wrapped box blur, rows then columns
+      for (const [src, dst, row] of [[lum, tmp, true], [tmp, blur, false]]) {
+        for (let a = 0; a < n; a++) {
+          let sum = 0;
+          const at = (b) => (row ? a * n + ((b + n) % n) : ((b + n) % n) * n + a);
+          for (let b = -R; b <= R; b++) sum += src[at(b)];
+          for (let b = 0; b < n; b++) { dst[at(b)] = sum / (2 * R + 1); sum += src[at(b + R + 1)] - src[at(b - R)]; }
+        }
+      }
+      let v2 = 0;
+      for (let p = 0; p < N; p++) { lum[p] -= blur[p]; v2 += lum[p] * lum[p]; }
+      const k = bump / Math.max(1e-4, Math.sqrt(v2 / N)) * 0.35;
+      for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+        const h = (xx, yy) => lum[((yy + n) % n) * n + ((xx + n) % n)];
+        const gx = -(h(x + 1, y) - h(x - 1, y)) * k, gy = -(h(x, y + 1) - h(x, y - 1)) * k;
+        const il = 1 / Math.hypot(gx, gy, 1), p = (y * n + x) * 4;
+        out[p] = (gx * il * 0.5 + 0.5) * 255; out[p + 1] = (gy * il * 0.5 + 0.5) * 255; out[p + 2] = (il * 0.5 + 0.5) * 255;
+        out[p + 3] = Math.max(0, Math.min(1, -lum[y * n + x] * Math.sign(bump) * Math.abs(k) * 0.6)) * 255;
+      }
+    }
+    for (let l = 0; l < levels; l++) {
+      this.device.queue.writeTexture({ texture: this.normArr, origin: [0, 0, layer], mipLevel: l }, out, { bytesPerRow: n * 4 }, [n, n]);
+      if (n === 1) break;
+      const h = n >> 1, next = new Uint8Array(h * h * 4);
+      for (let y = 0; y < h; y++) for (let x = 0; x < h; x++) for (let c = 0; c < 4; c++) {
+        const q = (yy, xx) => out[((y * 2 + yy) * n + x * 2 + xx) * 4 + c];
+        next[(y * h + x) * 4 + c] = (q(0, 0) + q(0, 1) + q(1, 0) + q(1, 1) + 2) >> 2;
+      }
+      out = next; n = h;
+    }
+  }
+
+  // Light culling: mark every tile each light's radius reaches, so a pixel only loops over the
+  // handful of lights near it instead of all of them. Tested on the ground plane (xz), which is
+  // conservative: the shader's attenuation still handles height.
+  binLights(lights, nl) {
+    const w = this.fogW, h = this.fogH, mask = this.mask;
+    mask.fill(0);
+    for (let k = 0; k < nl; k++) {
+      const [lx, , lz, r] = lights[k], r2 = r * r, bit = 1 << k;
+      const x0 = Math.max(0, Math.floor(lx - r)), x1 = Math.min(w - 1, Math.floor(lx + r));
+      const z0 = Math.max(0, Math.floor(lz - r)), z1 = Math.min(h - 1, Math.floor(lz + r));
+      for (let z = z0; z <= z1; z++) {
+        const dz = lz < z ? z - lz : lz > z + 1 ? lz - z - 1 : 0;
+        for (let x = x0; x <= x1; x++) {
+          const dx = lx < x ? x - lx : lx > x + 1 ? lx - x - 1 : 0;
+          if (dx * dx + dz * dz <= r2) mask[z * w + x] |= bit;
+        }
+      }
+    }
+    this.device.queue.writeTexture({ texture: this.maskTex }, mask, { bytesPerRow: w * 4 }, [w, h]);
   }
 
   resize() {
@@ -515,6 +766,49 @@ export class Renderer {
     this.depth = this.device.createTexture({ size: [w, h], sampleCount: SAMPLES, format: 'depth24plus', usage: GPUTextureUsage.RENDER_ATTACHMENT });
     this.msaaView = this.msaa.createView();
     this.depthView = this.depth.createView();
+    this.buildBloom(w, h);
+  }
+
+  // The frame resolves into sceneTex instead of the screen, so bloom can read it.
+  buildBloom(w, h) {
+    const d = this.device;
+    for (const t of this.bloomTex || []) t.destroy();
+    this.sceneTex?.destroy();
+    for (const b of this.bloomBufs || []) b.destroy();
+    this.sceneTex = d.createTexture({ size: [w, h], format: this.format, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
+    this.sceneView = this.sceneTex.createView();
+    this.bloomTex = []; this.bloomViews = []; this.bloomSize = [];
+    for (let k = 0; k < BLOOM_LEVELS; k++) {
+      const s = [Math.max(1, Math.ceil(w / 2 ** (k + 1))), Math.max(1, Math.ceil(h / 2 ** (k + 1)))];
+      const t = d.createTexture({ size: s, format: 'rgba16float', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
+      this.bloomTex.push(t); this.bloomViews.push(t.createView()); this.bloomSize.push(s);
+    }
+    // one bind group per pass: [source view, source size, uniform a, uniform b, target view, pipe, load]
+    const V = this.bloomViews, Z = this.bloomSize;
+    const steps = [['prefilter', this.sceneView, [w, h], BLOOM_THRESHOLD, BLOOM_KNEE, V[0]]];
+    for (let k = 1; k < BLOOM_LEVELS; k++) steps.push(['down', V[k - 1], Z[k - 1], 0, 0, V[k]]);
+    for (let k = BLOOM_LEVELS - 1; k > 0; k--) steps.push(['up', V[k], Z[k], 0, 0, V[k - 1]]);
+    steps.push(['composite', V[0], Z[0], BLOOM_STRENGTH, 0, null]);
+    this.bloomBufs = [];
+    this.bloomSteps = steps.map(([pipe, src, [sw, sh], a, b, dst]) => {
+      const buf = d.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      d.queue.writeBuffer(buf, 0, new Float32Array([1 / sw, 1 / sh, a, b]));
+      this.bloomBufs.push(buf);
+      const bg = d.createBindGroup({ layout: this.postBGL, entries: [
+        { binding: 0, resource: src }, { binding: 1, resource: this.linSamp },
+        { binding: 2, resource: { buffer: buf } }, { binding: 3, resource: this.sceneView },
+      ] });
+      return { pipe: this.bloomPipes[pipe], bg, dst, load: pipe === 'up' };
+    });
+  }
+
+  bloom(enc) {
+    for (const st of this.bloomSteps) {
+      const view = st.dst || this.ctx.getCurrentTexture().createView();
+      const pass = enc.beginRenderPass({ colorAttachments: [{ view, loadOp: st.load ? 'load' : 'clear', clearValue: { r: 0, g: 0, b: 0, a: 1 }, storeOp: 'store' }] });
+      pass.setPipeline(st.pipe); pass.setBindGroup(0, st.bg); pass.draw(3);
+      pass.end();
+    }
   }
 
   drawRanges(pass, mesh, bufName, ranges) {
@@ -538,6 +832,7 @@ export class Renderer {
     u.set([...fr.moonDir, 0], 48); u.set([...fr.moonCol, 0], 52); u.set([...fr.ambient, 0], 56);
     for (let k = 0; k < nl; k++) u.set(fr.lights[k], 60 + k * 8);
     d.queue.writeBuffer(this.ubuf, 0, u);
+    this.binLights(fr.lights, nl);
 
     // static instances and road markings only change when the city does
     const staticChanged = fr.staticVersion !== this.staticVersion;
@@ -573,7 +868,7 @@ export class Renderer {
       pass.end();
     }
     const pass = enc.beginRenderPass({
-      colorAttachments: [{ view: this.msaaView, resolveTarget: this.ctx.getCurrentTexture().createView(), clearValue: { r: 0.004, g: 0.006, b: 0.01, a: 1 }, loadOp: 'clear', storeOp: 'discard' }],
+      colorAttachments: [{ view: this.msaaView, resolveTarget: this.sceneView, clearValue: { r: 0.004, g: 0.006, b: 0.01, a: 1 }, loadOp: 'clear', storeOp: 'discard' }],
       depthStencilAttachment: { view: this.depthView, depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'discard' },
     });
     pass.setBindGroup(0, this.mainBG);
@@ -592,6 +887,7 @@ export class Renderer {
     if (pd.n) { pass.setPipeline(this.partAddPipe); pass.setVertexBuffer(0, this.quadBuf); pass.setVertexBuffer(1, this.gpuBufs.pd); pass.draw(6, pd.n); }
     if (bm.n) { pass.setPipeline(this.beamPipe); pass.setVertexBuffer(0, this.beamBuf); pass.setVertexBuffer(1, this.gpuBufs.beam); pass.draw(6, bm.n); }
     pass.end();
+    this.bloom(enc);
     d.queue.submit([enc.finish()]);
   }
 }

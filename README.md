@@ -89,12 +89,25 @@ ELEVENLABS_API_KEY=sk_... node tools/generate-audio.mjs --force   # regenerate e
 
 To change a line, a voice or a sound prompt, edit `tools/audio-manifest.mjs`, delete the matching `.mp3` and run the generator again.
 
+## Textures
+
+The city's surface textures (asphalt, paving, brick, concrete, graffiti, fly-posters and so on) and the scorch and blood decals were generated with Gemini's image model, `gemini-3.1-flash-image`, and live in `assets/textures/`. The whole set cost about $1.43 to generate. The game uses them as detail maps, so building and floor colours still set the overall tone.
+
+```sh
+npm run textures                                   # generate anything missing (key from .env or GEMINI_API_KEY)
+python3 tools/generate-textures.py brick graffiti  # regenerate just these
+python3 tools/generate-textures.py --process       # re-run the tiling step on cached images, no API calls
+```
+
+Prompts are in `tools/texture-manifest.json`. The script makes each texture tile seamlessly: it crops patterns like slabs and bricks to a whole number of repeats, and asks Gemini to repaint the seam when cropping isn't enough. It caches raw output and a cost ledger in `.texture-cache/`, which is gitignored, and stops before spending more than `--cap` (default $4.50). It needs Python 3 with Pillow and NumPy. Generated images carry Google's invisible SynthID watermark.
+
 ## How it's built
 
 | File | Role |
 |---|---|
 | `src/renderer.js` | WebGPU renderer: instanced meshes, cached shadow map, point lights, wet-street reflections, fog of war, decals, particles and beams |
 | `src/scene.js` | Turns the city into geometry and lights, in 10×10-tile chunks for frustum culling |
+| `src/textures.js` | Texture layers and how far each one repeats |
 | `src/mapgen.js` | Procedural city, vehicles and enemy placement |
 | `src/map.js` | Tiles, height-aware line of sight, cover, pathfinding, destruction |
 | `src/game.js` | Turns, vision, stealth, combat, explosions, abilities |
@@ -107,4 +120,9 @@ Rendering notes:
 - Only the visible part of the city is drawn.
 - Building shadows are rendered once and only redrawn when something is destroyed.
 - Pixels in unexplored fog skip lighting entirely.
+- Lights are binned per tile, so each pixel only loops over the few lights that can reach it.
+- Surfaces get normal maps derived from their textures when the game loads, so joints, cracks and bricks catch the light, and rain lingers in the grooves.
+- Contact shadows darken the ground where it meets walls, cars and props. They come from a per-tile map stored alongside the fog of war.
+- Bloom makes fire, neon, lamps and muzzle flashes glow. It runs at half resolution and below.
+- Fire particles are pooled and budgeted, so a street of burning cars costs about the same as a few.
 - The game lowers its render resolution if it can't hold about 40 fps.

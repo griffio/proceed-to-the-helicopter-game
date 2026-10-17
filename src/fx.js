@@ -1,11 +1,15 @@
-import { MW } from './defs.js';
+import { MW, MH } from './defs.js';
 import { lin } from './util.js';
 
 const rnd = (a, b) => a + Math.random() * (b - a);
+const MAX_PARTS = 2500;
+// Fire is emitted per burning tile, so many fires on screen share this many tiles' worth of particles.
+const FIRE_BUDGET = 40;
 
 export class FX {
   constructor() {
     this.parts = [];
+    this.pool = []; // dead particles, reused so burning wrecks don't churn the garbage collector
     this.beams = [];
     this.debris = [];
     this.lights = [];
@@ -15,8 +19,19 @@ export class FX {
   }
 
   spawn(p) {
-    if (this.parts.length > 2500) return;
-    this.parts.push({ vx: 0, vy: 0, vz: 0, drag: 0, grav: 0, rot: rnd(0, 6.28), vr: 0, size1: p.size, life: p.max, add: false, shape: 0, noFog: 0, seed: Math.random(), ...p });
+    const c = p.col;
+    this.part(p.x, p.y, p.z, p.vx || 0, p.vy || 0, p.vz || 0, p.size, p.size1 ?? p.size, c[0], c[1], c[2], c[3], p.max,
+      p.shape || 0, p.add || false, p.drag || 0, p.grav || 0, p.noFog || 0);
+  }
+  // Allocation-free spawn for the hot paths.
+  part(x, y, z, vx, vy, vz, size, size1, r, g, b, a, max, shape, add = false, drag = 0, grav = 0, noFog = 0) {
+    if (this.parts.length >= MAX_PARTS) return;
+    const p = this.pool.pop() || {};
+    p.x = x; p.y = y; p.z = z; p.vx = vx; p.vy = vy; p.vz = vz;
+    p.size = size; p.size1 = size1; p.r = r; p.g = g; p.b = b; p.a = a;
+    p.life = max; p.max = max; p.shape = shape; p.add = add; p.drag = drag; p.grav = grav; p.noFog = noFog;
+    p.rot = rnd(0, 6.28); p.seed = Math.random();
+    this.parts.push(p);
   }
   flash(x, y, z, r, col, intensity, dur) { this.lights.push({ x, y, z, r, col, i: intensity, life: dur, max: dur }); }
   beam(a, b, width, col, dur, glow = 1) { this.beams.push({ a, b, w: width, col, life: dur, max: dur, glow }); }
@@ -80,23 +95,34 @@ export class FX {
     return new Promise((resolve) => this.projectiles.push({ kind, from, to, t: 0, dur, arc, resolve, trail: 0 }));
   }
 
-  update(dt, map, time) {
+  // view: on-screen xz rectangle [x0, z0, x1, z1]; emitters outside it stay quiet.
+  update(dt, map, time, view) {
     // continuous emitters from map state
     this.emitAcc += dt;
     if (this.emitAcc > 0.06) {
       const steps = this.emitAcc; this.emitAcc = 0;
-      for (let i = 0; i < map.n; i++) {
-        if (map.fire[i] && Math.random() < steps * 9) {
-          const x = (i % MW) + rnd(0.15, 0.85), z = ((i / MW) | 0) + rnd(0.15, 0.85);
-          this.spawn({ x, y: 0.3, z, vy: rnd(1.2, 2.4), size: rnd(0.2, 0.38), size1: 0.05, col: [1, rnd(0.35, 0.6), 0.1, 0.9], max: rnd(0.4, 0.8), add: true, shape: 1 });
-          if (Math.random() < 0.35) this.spawn({ x, y: 1.4, z, vy: rnd(1, 2), vx: 0.3, size: 0.3, size1: 1.2, col: [0.08, 0.07, 0.07, 0.55], max: rnd(1.8, 3), shape: 2, grav: -0.2 });
-          if (Math.random() < 0.2) this.spawn({ x, y: 0.5, z, vx: rnd(-0.5, 0.5), vy: rnd(2, 4), vz: rnd(-0.5, 0.5), size: 0.035, col: [1, 0.6, 0.2, 1], max: rnd(0.6, 1.4), add: true, shape: 3 });
+      // a margin beyond the screen keeps smoke clouds already full when the camera pans onto them
+      const [x0, z0, x1, z1] = view || [0, 0, MW, MH], pad = 6;
+      const tx0 = Math.max(0, Math.floor(x0 - pad)), tx1 = Math.min(MW - 1, Math.ceil(x1 + pad));
+      const tz0 = Math.max(0, Math.floor(z0 - pad)), tz1 = Math.min(MH - 1, Math.ceil(z1 + pad));
+      let fires = 0;
+      for (let z = tz0; z <= tz1; z++) for (let x = tx0; x <= tx1; x++) if (map.fire[z * MW + x]) fires++;
+      // past the budget each tile emits less often, with bigger flames to keep the blaze looking full
+      const thin = Math.min(1, FIRE_BUDGET / Math.max(1, fires)), grow = Math.min(1.6, 1 / Math.sqrt(thin));
+      const fireRate = steps * 9 * thin;
+      for (let tz = tz0; tz <= tz1; tz++) for (let tx = tx0; tx <= tx1; tx++) {
+        const i = tz * MW + tx;
+        if (map.fire[i] && Math.random() < fireRate) {
+          const x = tx + rnd(0.15, 0.85), z = tz + rnd(0.15, 0.85);
+          this.part(x, 0.3, z, 0, rnd(1.2, 2.4), 0, rnd(0.2, 0.38) * grow, 0.05, 1, rnd(0.35, 0.6), 0.1, 0.9, rnd(0.4, 0.8), 1, true);
+          if (Math.random() < 0.35) this.part(x, 1.4, z, 0.3, rnd(1, 2), 0, 0.3, 1.2, 0.08, 0.07, 0.07, 0.55, rnd(1.8, 3), 2, false, 0, -0.2);
+          if (Math.random() < 0.2) this.part(x, 0.5, z, rnd(-0.5, 0.5), rnd(2, 4), rnd(-0.5, 0.5), 0.035, 0.035, 1, 0.6, 0.2, 1, rnd(0.6, 1.4), 3, true);
         }
         if (map.smoke[i] && Math.random() < steps * 3.2) {
-          const x = (i % MW) + rnd(0, 1), z = ((i / MW) | 0) + rnd(0, 1);
+          const x = tx + rnd(0, 1), z = tz + rnd(0, 1);
           const mist = map.mist[i];
-          this.spawn({ x, y: rnd(0.3, 1.4), z, vx: rnd(-0.2, 0.2), vy: rnd(0.05, 0.25), vz: rnd(-0.2, 0.2), size: rnd(0.7, 1.0), size1: rnd(1.1, 1.5),
-            col: mist ? [0.65, 0.75, 0.85, 0.32] : [0.52, 0.54, 0.57, 0.5], max: rnd(2.2, 3.2), shape: 2 });
+          this.part(x, rnd(0.3, 1.4), z, rnd(-0.2, 0.2), rnd(0.05, 0.25), rnd(-0.2, 0.2), rnd(0.7, 1.0), rnd(1.1, 1.5),
+            mist ? 0.65 : 0.52, mist ? 0.75 : 0.54, mist ? 0.85 : 0.57, mist ? 0.32 : 0.5, rnd(2.2, 3.2), 2);
         }
       }
     }
@@ -105,18 +131,19 @@ export class FX {
     for (let k = P.length - 1; k >= 0; k--) {
       const p = P[k];
       p.life -= dt;
-      if (p.life <= 0) { P[k] = P[P.length - 1]; P.pop(); continue; }
+      if (p.life <= 0) { P[k] = P[P.length - 1]; P.pop(); this.pool.push(p); continue; }
       const dr = Math.exp(-p.drag * dt);
       p.vx *= dr; p.vz *= dr; p.vy = p.vy * dr - p.grav * dt;
       p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt;
       if (p.y < 0.02 && p.grav > 0) { p.y = 0.02; p.vy *= -0.3; p.vx *= 0.6; p.vz *= 0.6; }
-      p.rot += p.vr * dt;
     }
     for (let k = this.beams.length - 1; k >= 0; k--) { const b = this.beams[k]; b.life -= dt; if (b.life <= 0) this.beams.splice(k, 1); }
     for (let k = this.lights.length - 1; k >= 0; k--) { const l = this.lights[k]; l.life -= dt; if (l.life <= 0) this.lights.splice(k, 1); }
     if (this.ring) for (let k = this.ring.length - 1; k >= 0; k--) { this.ring[k].life -= dt; if (this.ring[k].life <= 0) this.ring.splice(k, 1); }
+    let live = 0;
     for (const d of this.debris) {
       d.life -= dt;
+      if (d.life > 0) this.debris[live++] = d;
       if (d.rest) continue;
       d.vy -= 16 * dt;
       d.x += d.vx * dt; d.y += d.vy * dt; d.z += d.vz * dt;
@@ -126,7 +153,7 @@ export class FX {
         if (Math.abs(d.vy) < 0.6) { d.rest = true; d.rx = Math.round(d.rx / 1.57) * 1.57; d.rz = Math.round(d.rz / 1.57) * 1.57; }
       }
     }
-    this.debris = this.debris.filter((d) => d.life > 0);
+    this.debris.length = live;
     // projectiles
     for (let k = this.projectiles.length - 1; k >= 0; k--) {
       const p = this.projectiles[k];
@@ -157,7 +184,7 @@ export class FX {
       const t = 1 - p.life / p.max;
       const s = p.size + (p.size1 - p.size) * t;
       const fade = p.add ? 1 - t : Math.min(1, (1 - t) * 1.6) * Math.min(1, t * 6 + 0.2);
-      (p.add ? pd : pa).push(p.x, p.y, p.z, s, p.col[0], p.col[1], p.col[2], p.col[3] * fade, p.rot, p.shape, p.noFog, p.seed);
+      (p.add ? pd : pa).push(p.x, p.y, p.z, s, p.r, p.g, p.b, p.a * fade, p.rot, p.shape, p.noFog, p.seed);
     }
     for (const b of this.beams) {
       const k = b.life / b.max;

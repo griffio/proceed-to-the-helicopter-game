@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "audio": "node tools/generate-audio.mjs",
+    "textures": "python3 tools/generate-textures.py",
     "serve": "npx --yes http-server -c-1 -p 8080 ."
   }
 }

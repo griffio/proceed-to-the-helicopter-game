@@ -31,6 +31,7 @@ jobs:
           cp -r src _site/src
           mkdir -p _site/assets
           cp -r assets/audio _site/assets/audio
+          cp -r assets/textures _site/assets/textures
 
       - uses: actions/configure-pages@v5
 
