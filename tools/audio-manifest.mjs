@@ -149,7 +149,6 @@ export const SFX = [
   ['overwatch_trigger', 'Short sharp tactical alert beep, two tones', 0.5, false, 0.8],
   ['enemy_alert', 'Stealth game enemy alert sting, sudden dramatic orchestral hit with a metallic exclamation', 1.2, false, 0.6],
   ['ui_select', 'Soft futuristic UI click, short tick', 0.5, false, 0.8],
-  ['ui_confirm', 'Futuristic UI confirm sound, two quick ascending blips', 0.5, false, 0.8],
   ['ui_error', 'Short low UI error buzz', 0.5, false, 0.8],
   ['turn_player', 'Tense cinematic stinger, low synth pulse building, signaling your turn', 2, false, 0.5],
   ['turn_enemy', 'Ominous dark cinematic stinger, deep brass and taiko drum hit', 2, false, 0.5],
@@ -160,6 +159,5 @@ export const SFX = [
   ['heli_loop', 'Helicopter rotor blades hovering steadily, constant thumping', 6, true, 0.6],
   ['ambient_loop', 'Night city ambience with light rain, distant traffic, far away sirens, steady', 20, true, 0.4],
   ['tension_loop', 'Dark tense ambient synth drone with slow pulsing heartbeat bass, cinematic stealth music bed', 20, true, 0.4],
-  ['fire_loop', 'Car fire burning, crackling flames, steady', 5, true, 0.5],
   ['alarm_loop', 'Distant facility alarm siren wailing over the city', 6, true, 0.5],
 ];
