@@ -1,10 +1,19 @@
 // Build-time audio generation with ElevenLabs. The API key never ships to the browser.
-//   ELEVENLABS_API_KEY=sk_... node tools/generate-audio.mjs [--force]
-import { writeFile, access, mkdir } from 'node:fs/promises';
+//   node tools/generate-audio.mjs [--force]
+// The key comes from ELEVENLABS_API_KEY, or ELEVENLABS_API_KEY / ELEVEN_LABS_API_KEY in .env.
+import { writeFile, access, mkdir, readFile } from 'node:fs/promises';
 import { SPEECH, SFX } from './audio-manifest.mjs';
 
-const KEY = process.env.ELEVENLABS_API_KEY;
-if (!KEY) { console.error('Set ELEVENLABS_API_KEY'); process.exit(1); }
+const fromEnvFile = async () => {
+  const text = await readFile(new URL('../.env', import.meta.url), 'utf8').catch(() => '');
+  for (const line of text.split('\n')) {
+    const m = line.match(/^\s*(ELEVENLABS_API_KEY|ELEVEN_LABS_API_KEY)\s*=\s*(.+?)\s*$/);
+    if (m) return m[2].replace(/^['"]|['"]$/g, '');
+  }
+  return null;
+};
+const KEY = process.env.ELEVENLABS_API_KEY || await fromEnvFile();
+if (!KEY) { console.error('Set ELEVENLABS_API_KEY (or put it in .env)'); process.exit(1); }
 const OUT = new URL('../assets/audio/', import.meta.url);
 const force = process.argv.includes('--force');
 await mkdir(OUT, { recursive: true });

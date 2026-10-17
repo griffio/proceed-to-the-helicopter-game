@@ -79,6 +79,8 @@ export class Audio {
     return opts.length ? opts[Math.floor(Math.random() * opts.length)] : null;
   }
 
+  hasVoice(who, event) { return !!this.pickVariant(`vo_${who}_${event}`); }
+
   // Radio voice line. priority lines interrupt the queue gate.
   voice(who, event, { priority = false, world = null } = {}) {
     if (!this.ctx) return 0;

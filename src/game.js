@@ -782,7 +782,11 @@ export class Game {
   // ---------- player actions ----------
   select(u) {
     if (!u || u.side !== 'agent' || !this.alive(u)) return;
-    if (this.selected !== u) this.audio.voice(u.key, 'select');
+    // hurt agents answer differently: lying wounded, or still up but badly hit
+    if (this.selected !== u) {
+      const ev = u.downed ? 'downed' : u.hp <= u.maxHp / 2 ? 'wounded' : 'select';
+      this.audio.voice(u.key, this.audio.hasVoice(u.key, ev) ? ev : 'select');
+    }
     this.selected = u;
     this.cancelAction();
     this.focus(u.rx, u.rz);

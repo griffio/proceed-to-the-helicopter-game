@@ -24,6 +24,8 @@ const agentLines = {
     overwatch: ['Overwatch. I have the lane.'],
     spotted: ['Contact. I see them.'],
     extract: ['Viper aboard. Go, go!'],
+    wounded: ['Viper. I am hit, but I can still shoot.', 'Bleeding... still on target.'],
+    downed: ['Viper down... I cannot move. I need a medic.', 'I cannot feel my legs... do not leave me here.'],
   },
   bulldog: {
     select: ['Bulldog. Let us make some noise.', 'Big gun, ready.'],
@@ -35,6 +37,8 @@ const agentLines = {
     overwatch: ['Covering. Come and get it.'],
     spotted: ['Hostiles! Right there!'],
     extract: ['Bulldog on the bird!'],
+    wounded: ['Bulldog. Took a few. Still standing.', 'Hurts like hell. Just point me at them.'],
+    downed: ['Bulldog is down! Get me up, get me up!', 'Agh... cannot lift the gun. Somebody!'],
   },
   ghost: {
     select: ['Ghost. Already here.', 'Quiet as a shadow.'],
@@ -46,6 +50,8 @@ const agentLines = {
     overwatch: ['Watching from the dark.'],
     spotted: ['Movement. Enemy close.'],
     extract: ['Ghost aboard.'],
+    wounded: ['Ghost. Wounded. Still quiet.', 'They drew blood. My turn next.'],
+    downed: ['Ghost... down. Losing a lot of blood.', 'Cannot move... find me before they do.'],
   },
   sparks: {
     select: ['Sparks here! What are we blowing up?', 'Ready to cause trouble!'],
@@ -57,6 +63,8 @@ const agentLines = {
     overwatch: ['Watching the street.'],
     spotted: ['Oi! Enemies!'],
     extract: ['Sparks is on the helicopter!'],
+    wounded: ['Sparks here. Bit singed, still sparky!', 'Ow. Okay. Okay. I am fine. Mostly.'],
+    downed: ['Sparks down! This is not how I go out!', 'Bleeding out here! Somebody get Doc!'],
   },
   doc: {
     select: ['Doc here. Who needs patching?', 'Doc, ready.'],
@@ -68,6 +76,8 @@ const agentLines = {
     overwatch: ['Covering the team.'],
     spotted: ['Contact! Enemy spotted.'],
     extract: ['Doc aboard. Everyone in?'],
+    wounded: ['Doc. I am hurt. I will patch myself later.', 'Medic is wounded. Keep me covered.'],
+    downed: ['Doc is down... someone else has to patch me up.', 'Keep pressure on it... hurry.'],
   },
 };
 

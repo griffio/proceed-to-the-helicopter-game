@@ -83,9 +83,13 @@ One-time setup: in the repo, go to **Settings → Pages → Build and deployment
 All sound effects and voice lines are pre-generated with ElevenLabs into `assets/audio/` and played with the Web Audio API, with a radio filter on the squad's voices. The API key is only used when generating, never shipped to the browser.
 
 ```sh
-ELEVENLABS_API_KEY=sk_... npm run audio                           # generate missing files
-ELEVENLABS_API_KEY=sk_... node tools/generate-audio.mjs --force   # regenerate everything
+npm run audio                              # generate missing files
+node tools/generate-audio.mjs --force      # regenerate everything
 ```
+
+The key comes from `ELEVENLABS_API_KEY` in the environment, or from `ELEVENLABS_API_KEY` or `ELEVEN_LABS_API_KEY` in `.env`. Use the secret key, which starts with `sk_`, not the key ID.
+
+When you select an agent, they answer according to how they are. A downed agent bleeding out on the ground answers with a downed line, an agent at half health or less with a wounded line, and anyone else with their usual line.
 
 To change a line, a voice or a sound prompt, edit `tools/audio-manifest.mjs`, delete the matching `.mp3` and run the generator again.
 
