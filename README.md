@@ -16,13 +16,13 @@ Each agent sees in a 120° cone, and the rest of the city stays under fog of war
 
 ### Every shot is explained
 
-Hit chance comes from cover, range, smoke and trees in the way, height, darkness and field of view. Shooting an enemy who is unaware or looking the other way is much easier. The panel lists every modifier before you fire.
+Hit chance comes from cover, range, smoke, trees and window glass in the way, height, darkness and field of view. Shooting an enemy who is unaware or looking the other way is much easier. The panel lists every modifier before you fire.
 
 ![Sniper shot breakdown on an unaware gunner](docs/screenshots/aim.jpg)
 
 ### The city breaks
 
-Rockets and grenades flatten walls and cover, and agents on a destroyed roof fall. Cars catch fire and explode when shot enough, and set off alarms that lure guards. Fuel barrels, pumps and the tanker chain-react. Missed shots wear down whatever the target is hiding behind.
+Rockets and grenades flatten walls and cover, and agents on a destroyed roof fall. Cars catch fire and explode when shot enough, and set off alarms that lure guards. Fuel barrels, pumps and the tanker chain-react. Missed shots wear down whatever the target is hiding behind. Shots through a window shatter its glass, and the noise draws nearby guards.
 
 ![A car exploding beside an enemy patrol](docs/screenshots/explosion.jpg)
 

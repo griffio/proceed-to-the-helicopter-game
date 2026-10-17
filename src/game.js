@@ -310,6 +310,9 @@ export class Game {
     const mods = res.mods;
     let aim = u.aim;
     mods.push(['Aim', u.aim]);
+    // intact windows on the way: the shot breaks them, and the glass throws it off a little
+    res.glass = m.glassBetween(sx, sy, tx, ty);
+    if (res.glass.length) mods.push(['Shooting through glass', -10]);
     const rm = Math.round(W.rangeMod(d));
     if (rm) mods.push([rm > 0 ? 'Good range' : 'Poor range', rm]);
     let crit = W.crit;
@@ -374,6 +377,7 @@ export class Game {
 
   async fire(u, target, wk, opts = {}) {
     const W = WEAPONS[wk];
+    const m = this.map;
     const info = this.shotInfo(u, target, wk, u.x, u.y, { ...opts, ignoreFacing: !!opts.reaction });
     if (!info.ok) return false;
     const tx = target.side ? target.x : this.map.X(target.tile), ty = target.side ? target.y : this.map.Y(target.tile);
@@ -448,6 +452,13 @@ export class Game {
         this.fx.impact(end[0], Math.max(0.1, end[1]), end[2]);
         this.ui.floatAt(tx, ty, 'MISS', 'miss');
       }
+    }
+    // the shot shatters any intact glass it went through; breaking glass is loud even for a laser
+    if (info.glass.length) {
+      const ev = [];
+      for (const i of info.glass) m.breakGlass(i, ev);
+      await this.processEvents(ev);
+      for (const i of info.glass) this.noise(m.X(i), m.Y(i), 8, u);
     }
     this.noise(u.x, u.y, W.noise, u);
     if (u.side === 'agent' && !opts.reaction) { u.ap = 0; u.overwatch = false; }

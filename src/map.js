@@ -57,38 +57,71 @@ export class GameMap {
   }
   coverOf(i) { return OBJ[this.obj[i]].cover; }
 
-  // Line of sight from tile A's eyes to a standing body at tile B.
-  // Returns -1 if blocked, otherwise the amount of smoke/foliage crossed.
-  los(ax, ay, bx, by, aerial = false) {
-    if (ax === bx && ay === by) return 0;
-    const ia = this.idx(ax, ay), ib = this.idx(bx, by);
-    const h0 = aerial ? 9 : this.standH(ia) + EYE;
-    const h1 = this.standH(ib) + BODY;
+  // Walks the tiles a sight line from A's eyes to B's body crosses (A and B excluded), calling
+  // visit(x, y, lineHeight) for each. A line passing exactly through a corner visits both side
+  // tiles with corner = true. visit returns true to stop; trace then returns true too.
+  _trace(ax, ay, bx, by, aerial, visit) {
+    const h0 = aerial ? 9 : this.standH(this.idx(ax, ay)) + EYE;
+    const h1 = this.standH(this.idx(bx, by)) + BODY;
     const dx = bx - ax, dy = by - ay;
     const sx = Math.sign(dx), sy = Math.sign(dy);
     const tdx = dx ? 1 / Math.abs(dx) : Infinity, tdy = dy ? 1 / Math.abs(dy) : Infinity;
     let tmx = dx ? 0.5 / Math.abs(dx) : Infinity, tmy = dy ? 0.5 / Math.abs(dy) : Infinity;
-    let x = ax, y = ay, smoke = 0;
+    let x = ax, y = ay;
     for (let guard = 0; guard < 400; guard++) {
       let t;
       if (Math.abs(tmx - tmy) < 1e-9) {
         t = tmx;
-        // passing exactly through a corner: blocked only if both side cells block
         const lh = h0 + (h1 - h0) * t;
-        const c1 = this._blocks(x + sx, y, lh, ax, ay, bx, by, aerial);
-        const c2 = this._blocks(x, y + sy, lh, ax, ay, bx, by, aerial);
-        if (c1 && c2) return -1;
+        if (visit(x + sx, y, lh, true, x, y + sy)) return true;
         tmx += tdx; tmy += tdy; x += sx; y += sy;
       } else if (tmx < tmy) { t = tmx; tmx += tdx; x += sx; }
       else { t = tmy; tmy += tdy; y += sy; }
-      if (x === bx && y === by) return smoke;
-      const lh = h0 + (h1 - h0) * t;
-      if (this._blocks(x, y, lh, ax, ay, bx, by, aerial)) return -1;
+      if (x === bx && y === by) return false;
+      if (visit(x, y, h0 + (h1 - h0) * t, false)) return true;
+    }
+    return false;
+  }
+
+  // Line of sight from tile A's eyes to a standing body at tile B.
+  // Returns -1 if blocked, otherwise the amount of smoke/foliage crossed.
+  los(ax, ay, bx, by, aerial = false) {
+    if (ax === bx && ay === by) return 0;
+    let smoke = 0;
+    const blocked = this._trace(ax, ay, bx, by, aerial, (x, y, lh, corner, x2, y2) => {
+      // passing exactly through a corner: blocked only if both side cells block
+      if (corner) return this._blocks(x, y, lh, ax, ay, bx, by, aerial) && this._blocks(x2, y2, lh, ax, ay, bx, by, aerial);
+      if (this._blocks(x, y, lh, ax, ay, bx, by, aerial)) return true;
       const i = this.idx(x, y);
       if (this.smoke[i]) smoke += 1;
       if (this.obj[i] === O.TREE && lh < 4) smoke += 0.75;
-    }
-    return smoke;
+      return false;
+    });
+    return blocked ? -1 : smoke;
+  }
+
+  // Intact windows a shot from A to B passes through, between the sill and the lintel.
+  glassBetween(ax, ay, bx, by) {
+    const out = [];
+    if (ax === bx && ay === by) return out;
+    const pane = (x, y, lh) => {
+      const i = this.idx(x, y);
+      if (this.obj[i] === O.WINDOW && this.glass[i] && lh > 0.95 && lh < 2.2 && !out.includes(i)) out.push(i);
+    };
+    this._trace(ax, ay, bx, by, false, (x, y, lh, corner, x2, y2) => {
+      if (this.inb(x, y)) pane(x, y, lh);
+      if (corner && this.inb(x2, y2)) pane(x2, y2, lh);
+      return false;
+    });
+    return out;
+  }
+
+  // Shatters a window's glass (cosmetic: the frame and its cover stay).
+  breakGlass(i, ev) {
+    if (this.obj[i] !== O.WINDOW || !this.glass[i]) return;
+    this.glass[i] = 0;
+    ev.push({ type: 'glass', x: this.X(i), y: this.Y(i) });
+    this.version++;
   }
 
   _blocks(x, y, lh, ax, ay, bx, by, aerial) {
