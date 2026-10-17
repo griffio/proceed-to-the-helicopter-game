@@ -93,6 +93,8 @@ To change a line, a voice or a sound prompt, edit `tools/audio-manifest.mjs`, de
 
 The city's surface textures (asphalt, paving, brick, concrete, graffiti, fly-posters and so on) and the scorch and blood decals were generated with Gemini's image model, `gemini-3.1-flash-image`, and live in `assets/textures/`. The whole set cost about $1.43 to generate. The game uses them as detail maps, so building and floor colours still set the overall tone.
 
+![Close-up of a brick building under a street lamp, with lit windows, neon, paving slabs and wet asphalt](docs/screenshots/building.jpg)
+
 ```sh
 npm run textures                                   # generate anything missing (key from .env or GEMINI_API_KEY)
 python3 tools/generate-textures.py brick graffiti  # regenerate just these
