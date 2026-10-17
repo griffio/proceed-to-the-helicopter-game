@@ -10,7 +10,7 @@ Your five-agent cell has been burned. Get them across a rain-soaked, destructibl
 
 ### Stealth first
 
-Each agent sees in a 120° cone, and the rest of the city stays under fog of war. Enemies you can see show their vision cones as red tiles. Lit areas get you spotted from further away, so shooting out street lamps buys you darkness. If an enemy spots you, kill them before the enemy turn or they raise the alarm and reinforcements start arriving.
+Each agent sees in a 120° cone, and the rest of the city stays under fog of war. Enemies you can see show their vision cones as red tiles. Lit areas get you spotted from further away, so shooting out street lamps buys you darkness. Or stand next to a lamp and use **Kill Light** to switch it off quietly for one action. Any guard watching the lamp will see it die and come over to look, which makes a good lure for an ambush. If an enemy spots you, kill them before the enemy turn or they raise the alarm and reinforcements start arriving.
 
 ![Squad closing on an unaware guard post, with enemy vision cones](docs/screenshots/stealth.jpg)
 

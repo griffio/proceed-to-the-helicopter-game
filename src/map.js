@@ -18,6 +18,7 @@ export class GameMap {
     this.veh = new Int16Array(n).fill(-1);
     this.ladder = new Int8Array(n).fill(-1);
     this.glass = new Uint8Array(n);
+    this.dark = new Uint8Array(n); // street lamps switched off by hand
     this.smoke = new Uint8Array(n);
     this.mist = new Uint8Array(n);
     this.fire = new Uint8Array(n);
@@ -298,6 +299,22 @@ export class GameMap {
     this.version++;
   }
 
+  // Direction a street lamp's arm reaches out over the road, as [dx, dy].
+  lampArm(i) {
+    const x = this.X(i), y = this.Y(i);
+    for (const [dx, dy] of DIR4) if (this.inb(x + dx, y + dy) && this.floor[this.idx(x + dx, y + dy)] === F.ROAD) return [dx, dy];
+    return [0, 0];
+  }
+
+  // Switches a street lamp off by hand: the pole stays, the light goes.
+  killLamp(i) {
+    if (this.obj[i] !== O.LAMP || this.dark[i]) return false;
+    this.dark[i] = 1;
+    this.computeLit();
+    this.version++;
+    return true;
+  }
+
   computeLit() {
     this.lit.fill(0);
     const light = (cx, cy, r) => {
@@ -306,7 +323,7 @@ export class GameMap {
           if ((x + 0.5 - cx) ** 2 + (y + 0.5 - cy) ** 2 <= r * r) this.lit[y * MW + x] = 1;
     };
     for (let i = 0; i < this.n; i++) {
-      if (this.obj[i] === O.LAMP) light(this.X(i) + 0.5, this.Y(i) + 0.5, 5.5);
+      if (this.obj[i] === O.LAMP && !this.dark[i]) light(this.X(i) + 0.5, this.Y(i) + 0.5, 5.5);
       if (this.fire[i]) light(this.X(i) + 0.5, this.Y(i) + 0.5, 3.5);
     }
     for (const d of this.decor) if (d.kind === 'neon') light(d.lx, d.lz, 3.5);

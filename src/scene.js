@@ -144,12 +144,14 @@ export class SceneBuilder {
         }
         case O.LAMP: {
           cyl.add(cx, fh, cz, 0.12, 4.0, 0.12, 0, DARK);
-          // arm points toward the nearest road
-          let ax = 0, az = 0;
-          for (const [dx, dy] of DIR4) if (map.inb(x + dx, y + dy) && map.floor[map.idx(x + dx, y + dy)] === F.ROAD) { ax = dx; az = dy; break; }
+          // arm points toward the nearest road; a lamp switched off keeps its pole and loses its light
+          const [ax, az] = map.lampArm(i);
           box.add(cx + ax * 0.35, fh + 3.9, cz + az * 0.35, ax ? 0.8 : 0.12, 0.08, az ? 0.8 : 0.12, 0, DARK);
-          box.add(cx + ax * 0.7, fh + 3.75, cz + az * 0.7, 0.32, 0.12, 0.32, 0, [1, 0.7, 0.35], 4, 4);
-          lights.push([cx + ax * 0.7, 3.6, cz + az * 0.7, 8, 1.0, 0.6, 0.28, 2.6, 0]);
+          if (map.dark[i]) box.add(cx + ax * 0.7, fh + 3.75, cz + az * 0.7, 0.32, 0.12, 0.32, 0, [0.05, 0.05, 0.06], 3);
+          else {
+            box.add(cx + ax * 0.7, fh + 3.75, cz + az * 0.7, 0.32, 0.12, 0.32, 0, [1, 0.7, 0.35], 4, 4);
+            lights.push([cx + ax * 0.7, 3.6, cz + az * 0.7, 8, 1.0, 0.6, 0.28, 2.6, 0]);
+          }
           break;
         }
         case O.PUMP:

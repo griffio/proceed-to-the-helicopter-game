@@ -842,6 +842,7 @@ export class Game {
     if (u.abilities.includes('shadow')) acts.push({ id: 'shadow', label: 'Shadow', icon: '◐', kind: 'instant', disabled: noAp || (u.cooldown.shadow > 0 ? `Cooldown ${u.cooldown.shadow}` : null), hint: 'Nearly invisible for 2 turns' });
     acts.push({ id: 'overwatch', label: 'Overwatch', icon: '◉', kind: 'instant', disabled: noAp || (this.weaponAmmo(u) <= 0 ? 'Reload needed' : null), hint: 'Shoot the first enemy that moves in view' });
     acts.push({ id: 'hunker', label: 'Hunker', icon: '⛉', kind: 'instant', disabled: noAp, hint: 'Doubles cover' });
+    if (this.lampNear(u) >= 0) acts.push({ id: 'lightsout', label: 'Kill Light', icon: '☾', kind: 'instant', disabled: noAp, hint: 'Quietly switch off this street lamp' });
     if (u.weapons.some((w) => isFinite(w.max) && w.ammo < w.max)) acts.push({ id: 'reload', label: 'Reload', icon: '↻', kind: 'instant', disabled: noAp });
     acts.push({ id: 'face', label: 'Look', icon: '👁', kind: 'face', disabled: null, hint: 'Free: turn to face a direction' });
     if (this.map.lzTiles.has(this.idx(u.x, u.y))) acts.unshift({ id: 'extract', label: 'EXTRACT', icon: '⇪', kind: 'instant', disabled: noAp, hot: true });
@@ -972,8 +973,53 @@ export class Game {
     else if (id === 'hunker') { u.hunker = true; u.ap = 0; this.ui.float(u, 'HUNKERED', 'ow'); this.audio.play('hunker', { pos: [u.x, u.y] }); }
     else if (id === 'reload') { for (const w of u.weapons) if (isFinite(w.max)) w.ammo = w.max; u.ap -= 1; this.audio.play('reload', { pos: [u.x, u.y] }); this.ui.float(u, 'RELOADED', 'ow'); }
     else if (id === 'shadow') { u.shadow = 2; u.cooldown.shadow = 4; u.ap -= 1; this.ui.float(u, 'SHADOW', 'ow'); this.audio.voice('ghost', 'ability', { priority: true }); }
+    else if (id === 'lightsout') this.killLight(u);
     else if (id === 'extract') { await this.extract(u); return; }
     this.afterAction(u);
+  }
+
+  // A working street lamp next to the agent, on the same level, or -1.
+  lampNear(u) {
+    const m = this.map;
+    if (m.level(this.idx(u.x, u.y))) return -1;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const x = u.x + dx, y = u.y + dy;
+      if (!m.inb(x, y)) continue;
+      const i = this.idx(x, y);
+      if (m.obj[i] === O.LAMP && !m.dark[i]) return i;
+    }
+    return -1;
+  }
+
+  // Switch off an adjacent street lamp by hand. Far quieter than shooting it out, but any guard
+  // watching the lamp sees it die and comes over to look.
+  killLight(u) {
+    const m = this.map, i = this.lampNear(u);
+    if (i < 0) return;
+    const x = m.X(i), y = m.Y(i);
+    // a lit lamp catches the eye from a little beyond normal sight range
+    const watching = (e) => {
+      const d = dist(e.x, e.y, x, y), half = e.state === 'suspicious' || e.vigilant ? 1.22 : 0.87;
+      if (d > e.vision + 4) return false;
+      if (d > 1.5 && Math.abs(angleDiff(Math.atan2(y - e.y, x - e.x), e.facing)) > half) return false;
+      return m.canSee(e.x, e.y, x, y);
+    };
+    const witnesses = this.enemies.filter((e) => !e.dead && e.state !== 'alerted' && watching(e));
+    u.ap -= 1;
+    u.facing = Math.atan2(y - u.y, x - u.x);
+    m.killLamp(i);
+    const [ax, az] = m.lampArm(i), hx = x + 0.5 + ax * 0.7, hz = y + 0.5 + az * 0.7;
+    this.audio.play('glass_shatter', { pos: [x, y], vol: 0.35 });
+    this.fx.flash(hx, 3.6, hz, 4, [0.6, 0.8, 1], 3, 0.12);
+    for (let k = 0; k < 14; k++) this.fx.spawn({ x: hx, y: 3.7, z: hz, vx: (Math.random() - 0.5) * 2, vy: Math.random() * 1.5, vz: (Math.random() - 0.5) * 2, grav: 9, size: 0.04, col: [1, 0.85, 0.5, 1], max: 0.4 + Math.random() * 0.5, add: true, shape: 3 });
+    this.ui.float(u, 'LIGHTS OUT', 'ow');
+    this.noise(x, y, 3, u);
+    for (const e of witnesses) {
+      e.state = 'suspicious'; e.susTurns = 3; e.investigate = { x, y };
+      e.facing = Math.atan2(y - e.y, x - e.x);
+      if (e.seen) this.ui.float(e, '?', 'sus');
+    }
+    this.updateVision();
   }
 
   async suppress(u, t) {
