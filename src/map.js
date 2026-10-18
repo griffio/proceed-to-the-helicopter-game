@@ -219,9 +219,12 @@ export class GameMap {
           else continue;
         } else {
           if (la !== lb) continue;
-          const i1 = ay * MW + bx, i2 = by * MW + ax;
-          if (!this.walkable(i1) || !this.walkable(i2) || this.level(i1) !== la || this.level(i2) !== la) continue;
-          cost = 1.5;
+          // Each side tile is open (0), a slim prop to squeeze past (1) or solid (2).
+          // A solid corner can only be cut when the other side is slim, leaving room to squeeze.
+          const side = (i) => (this.walkable(i) && this.level(i) === la ? 0 : la === 0 && OBJ[this.obj[i]].slim ? 1 : 2);
+          const s1 = side(ay * MW + bx), s2 = side(by * MW + ax);
+          if ((s1 === 2 && s2 !== 1) || (s2 === 2 && s1 !== 1)) continue;
+          cost = s1 || s2 ? 2 : 1.5;
         }
         cost *= OBJ[this.obj[b]].moveCost;
         if (hazardCost && this.fire[b]) cost += hazardCost;

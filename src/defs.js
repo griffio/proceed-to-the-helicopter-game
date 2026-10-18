@@ -24,6 +24,7 @@ export const O = {
 // walk: passable. cover: 0 none, 1 half, 2 full. h: line-of-sight blocking height.
 // peek: a unit right next to it can lean around it (it never blocks LOS for adjacent shooters/targets).
 // to: what it becomes when destroyed. shootable: can be targeted directly.
+// slim: thin enough that a unit can squeeze diagonally past it (at extra cost).
 export const OBJ = [];
 const def = (id, p) => (OBJ[id] = { name: '', walk: false, cover: 0, h: 0, hp: 10, peek: true, to: O.NONE, moveCost: 1, ...p });
 def(O.NONE, { walk: true, hp: 0 });
@@ -37,10 +38,10 @@ def(O.CRATES, { name: 'Crate stack', cover: 2, h: 2.1, hp: 12, to: O.CRATE, debr
 def(O.BARRIER, { name: 'Barrier', cover: 1, h: 1.0, hp: 16, to: O.RUBBLE, debris: '#9a9a96' });
 def(O.SANDBAG, { name: 'Sandbags', cover: 1, h: 1.0, hp: 14, debris: '#8a7b58' });
 def(O.DUMPSTER, { name: 'Dumpster', cover: 1, h: 1.35, hp: 14, debris: '#2f5a3a' });
-def(O.BARREL, { name: 'Fuel barrel', cover: 1, h: 1.0, hp: 2, shootable: true, explode: { r: 1.9, dmg: 4, env: 10 }, debris: '#a33' });
-def(O.HYDRANT, { name: 'Hydrant', cover: 0, h: 0.6, hp: 3, shootable: true, mist: true, debris: '#b22' });
-def(O.TREE, { name: 'Tree', cover: 1, h: 0, hp: 10, foliage: true, debris: '#2b4a22' });
-def(O.LAMP, { name: 'Street lamp', cover: 0, h: 0, hp: 2, shootable: true, debris: '#444' });
+def(O.BARREL, { name: 'Fuel barrel', slim: true, cover: 1, h: 1.0, hp: 2, shootable: true, explode: { r: 1.9, dmg: 4, env: 10 }, debris: '#a33' });
+def(O.HYDRANT, { name: 'Hydrant', slim: true, cover: 0, h: 0.6, hp: 3, shootable: true, mist: true, debris: '#b22' });
+def(O.TREE, { name: 'Tree', slim: true, cover: 1, h: 0, hp: 10, foliage: true, debris: '#2b4a22' });
+def(O.LAMP, { name: 'Street lamp', slim: true, cover: 0, h: 0, hp: 2, shootable: true, debris: '#444' });
 def(O.PUMP, { name: 'Fuel pump', cover: 1, h: 1.6, hp: 3, shootable: true, explode: { r: 2.6, dmg: 5, env: 16 }, debris: '#ddd' });
 def(O.HEDGE, { name: 'Hedge', cover: 1, h: 1.0, hp: 6, debris: '#2b4a22' });
 def(O.BENCH, { name: 'Bench', cover: 1, h: 0.7, hp: 5, debris: '#6a4a2a' });
