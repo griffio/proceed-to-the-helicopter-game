@@ -98,6 +98,9 @@ export class Audio {
     return b.duration;
   }
 
+  // Seconds until the current voice line (plus its gap) has finished.
+  voiceLeft() { return this.ctx ? Math.max(0, this.voiceBusyUntil - this.ctx.currentTime) : 0; }
+
   loop(id, vol = 0.5, bus = null) {
     if (this.loops.has(id)) { this.loops.get(id).g.gain.setTargetAtTime(vol, this.ctx.currentTime, 0.4); return; }
     const b = this.buffers.get(id);

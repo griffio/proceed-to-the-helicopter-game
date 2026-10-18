@@ -1088,14 +1088,25 @@ export class Game {
     this.afterAction(null);
   }
 
-  afterAction(u) {
+  // linger: seconds to hold on the finished action before moving the camera on.
+  async afterAction(u, linger = 0.9) {
     this.cancelAction();
     this._reach = null;
     if (this.phase !== 'player') return;
     if (u && this.alive(u) && u.ap > 0) { this.ui.refresh(); return; }
+    await this.settle(linger);
+    if (this.phase !== 'player') return;
     const next = this.agents.find((a) => this.alive(a) && !a.downed && a.ap > 0);
     if (next) { this.selected = next; this.focus(next.rx, next.rz); this.ui.refresh(); }
-    else { this.selected = null; this.ui.refresh(); setTimeout(() => { if (this.phase === 'player' && !this.busy) this.endTurn(); }, 700); }
+    else { this.selected = null; this.ui.refresh(); this.endTurn(); }
+  }
+
+  // Block input for at least min seconds, then until voice lines (e.g. a delayed kill line) finish.
+  async settle(min, max = 3.5) {
+    this.busy = true; this.ui.refresh();
+    await this.sleep(min * 1000);
+    for (let t = min, left; t < max && (left = this.audio.voiceLeft()) > 0; t += left) await this.sleep(Math.min(left, max - t) * 1000);
+    this.busy = false;
   }
 
   // Tap on a world tile (or a unit) during the player's turn.
@@ -1157,7 +1168,7 @@ export class Game {
       if (Math.random() < 0.5) this.audio.voice(u.key, 'move');
       try { await this.moveUnit(u, path); } finally { this.busy = false; }
       this._reach = null;
-      this.afterAction(u);
+      this.afterAction(u, 0.3);
       this.checkMilestones(u);
       return;
     }
